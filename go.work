@@ -1,0 +1,9 @@
+go 1.25.1
+
+use (
+	./services/api-gateway
+	./services/carrier-sync-service
+	./services/notification-service
+	./services/order-service
+	./services/tracking-service
+)
