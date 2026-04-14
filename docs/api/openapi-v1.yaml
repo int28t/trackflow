@@ -1,0 +1,32 @@
+openapi: 3.0.3
+info:
+  title: TrackFlow API Gateway Public API
+  version: 1.0.0
+  description: >-
+    Baseline public contract for API Gateway.
+    Current v1 implementation exposes the health endpoint.
+    Domain endpoints are added incrementally with backward compatibility.
+servers:
+  - url: http://localhost:8080
+    description: Local stack via Nginx
+  - url: /
+    description: Relative base URL
+tags:
+  - name: System
+    description: Service health and operational endpoints
+paths:
+  /health:
+    get:
+      tags:
+        - System
+      summary: Gateway health check
+      description: Returns status for liveness checks.
+      operationId: getGatewayHealth
+      responses:
+        "200":
+          description: Gateway is healthy
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
