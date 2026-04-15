@@ -1,9 +1,12 @@
 package main
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"os"
+
+	"trackflow/services/api-gateway/internal/gateway"
 )
 
 const (
@@ -13,18 +16,19 @@ const (
 )
 
 func main() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
+	router := gateway.NewRouter(log.Default())
 
 	port := getEnv(portEnvKey, defaultPort)
 	addr := ":" + port
 
 	log.Printf("%s listening on %s", serviceName, addr)
 
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	server := &http.Server{
+		Addr:    addr,
+		Handler: router,
+	}
+
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("%s server failed: %v", serviceName, err)
 	}
 }
