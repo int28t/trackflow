@@ -18,6 +18,7 @@ import (
 const (
 	healthTimeout         = 2 * time.Second
 	listTimeout           = 3 * time.Second
+	getOrderTimeout       = 3 * time.Second
 	createOrderTimeout    = 5 * time.Second
 	maxRequestPayloadSize = 128 * 1024
 )
@@ -53,7 +54,9 @@ func New(logger *log.Logger, svc *service.OrderService) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", h.health)
 	mux.HandleFunc("/orders", h.createOrder)
+	mux.HandleFunc("/orders/{id}", h.getOrderByID)
 	mux.HandleFunc("/v1/orders", h.orders)
+	mux.HandleFunc("/v1/orders/{id}", h.getOrderByID)
 
 	return mux
 }
@@ -177,6 +180,42 @@ func (h *Handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		OrderID: order.ID,
 		Status:  order.Status,
 	})
+}
+
+func (h *Handler) getOrderByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if h.svc == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "service unavailable")
+		return
+	}
+
+	orderID := strings.TrimSpace(r.PathValue("id"))
+
+	ctx, cancel := context.WithTimeout(r.Context(), getOrderTimeout)
+	defer cancel()
+
+	order, err := h.svc.GetOrderByID(ctx, orderID)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			writeJSONError(w, http.StatusBadRequest, extractValidationMessage(err))
+			return
+		}
+
+		if errors.Is(err, service.ErrOrderNotFound) {
+			writeJSONError(w, http.StatusNotFound, "order not found")
+			return
+		}
+
+		h.logger.Printf("get order failed: %v", err)
+		writeJSONError(w, http.StatusInternalServerError, "failed to get order")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, order)
 }
 
 func parseLimit(raw string) (int, error) {

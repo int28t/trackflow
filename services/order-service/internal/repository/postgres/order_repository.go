@@ -24,6 +24,18 @@ ORDER BY created_at DESC
 LIMIT $1
 `
 
+const getOrderByIDQuery = `
+SELECT
+	id::text,
+	customer_id::text,
+	status::text,
+	created_at,
+	updated_at
+FROM orders
+WHERE id = $1::uuid
+LIMIT 1
+`
+
 const getOrderByIdempotencyKeyQuery = `
 SELECT
 	id::text,
@@ -118,6 +130,24 @@ func (r *OrderRepository) ListOrders(ctx context.Context, limit int) ([]model.Or
 	}
 
 	return orders, nil
+}
+
+func (r *OrderRepository) GetOrderByID(ctx context.Context, orderID string) (model.Order, error) {
+	if r == nil || r.db == nil {
+		return model.Order{}, errors.New("database is not configured")
+	}
+
+	row := r.db.QueryRowContext(ctx, getOrderByIDQuery, orderID)
+	order, err := scanOrder(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.Order{}, service.ErrOrderNotFound
+		}
+
+		return model.Order{}, err
+	}
+
+	return order, nil
 }
 
 func (r *OrderRepository) GetOrderByIdempotencyKey(ctx context.Context, idempotencyKey string) (model.Order, error) {

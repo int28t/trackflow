@@ -26,6 +26,7 @@ var (
 type Repository interface {
 	Ping(ctx context.Context) error
 	ListOrders(ctx context.Context, limit int) ([]model.Order, error)
+	GetOrderByID(ctx context.Context, orderID string) (model.Order, error)
 	CreateOrder(ctx context.Context, input model.CreateOrderInput, idempotencyKey string) (model.Order, error)
 	GetOrderByIdempotencyKey(ctx context.Context, idempotencyKey string) (model.Order, error)
 }
@@ -52,6 +53,23 @@ func (s *OrderService) ListOrders(ctx context.Context, limit int) ([]model.Order
 	}
 
 	return s.repo.ListOrders(ctx, normalizeLimit(limit))
+}
+
+func (s *OrderService) GetOrderByID(ctx context.Context, orderID string) (model.Order, error) {
+	if s == nil || s.repo == nil {
+		return model.Order{}, errors.New("repository is not configured")
+	}
+
+	id := strings.TrimSpace(orderID)
+	if id == "" {
+		return model.Order{}, validationError("order_id is required")
+	}
+
+	if !uuidPattern.MatchString(id) {
+		return model.Order{}, validationError("order_id must be a valid UUID")
+	}
+
+	return s.repo.GetOrderByID(ctx, id)
 }
 
 func (s *OrderService) CreateOrder(ctx context.Context, input model.CreateOrderInput, idempotencyKey string) (model.Order, bool, error) {
