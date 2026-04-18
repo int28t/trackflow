@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -33,16 +34,16 @@ const (
 )
 
 func main() {
-	logger := log.Default()
+	logger := configureJSONLogger(serviceName)
 
 	dsn := os.Getenv(dsnEnvKey)
 	if dsn == "" {
-		log.Fatalf("%s is required", dsnEnvKey)
+		logger.Fatalf("%s is required", dsnEnvKey)
 	}
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		log.Fatalf("%s failed to init db: %v", serviceName, err)
+		logger.Fatalf("%s failed to init db: %v", serviceName, err)
 	}
 	defer db.Close()
 
@@ -50,7 +51,7 @@ func main() {
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
-		log.Fatalf("%s failed to connect to db: %v", serviceName, err)
+		logger.Fatalf("%s failed to connect to db: %v", serviceName, err)
 	}
 
 	repository := postgres.New(db)
@@ -78,7 +79,7 @@ func main() {
 	port := getEnv(portEnvKey, defaultPort)
 	addr := ":" + port
 
-	log.Printf("%s listening on %s", serviceName, addr)
+	logger.Printf("%s listening on %s", serviceName, addr)
 
 	server := &http.Server{
 		Addr:    addr,
@@ -86,8 +87,19 @@ func main() {
 	}
 
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("%s server failed: %v", serviceName, err)
+		logger.Fatalf("%s server failed: %v", serviceName, err)
 	}
+}
+
+func configureJSONLogger(service string) *log.Logger {
+	base := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", service)
+	structured := slog.NewLogLogger(base.Handler(), slog.LevelInfo)
+	structured.SetFlags(0)
+
+	log.SetFlags(0)
+	log.SetOutput(structured.Writer())
+
+	return structured
 }
 
 func getEnv(key, fallback string) string {

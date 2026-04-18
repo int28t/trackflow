@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -16,12 +17,13 @@ const (
 )
 
 func main() {
-	router := gateway.NewRouter(log.Default())
+	logger := configureJSONLogger(serviceName)
+	router := gateway.NewRouter(logger)
 
 	port := getEnv(portEnvKey, defaultPort)
 	addr := ":" + port
 
-	log.Printf("%s listening on %s", serviceName, addr)
+	logger.Printf("%s listening on %s", serviceName, addr)
 
 	server := &http.Server{
 		Addr:    addr,
@@ -29,8 +31,19 @@ func main() {
 	}
 
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("%s server failed: %v", serviceName, err)
+		logger.Fatalf("%s server failed: %v", serviceName, err)
 	}
+}
+
+func configureJSONLogger(service string) *log.Logger {
+	base := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", service)
+	structured := slog.NewLogLogger(base.Handler(), slog.LevelInfo)
+	structured.SetFlags(0)
+
+	log.SetFlags(0)
+	log.SetOutput(structured.Writer())
+
+	return structured
 }
 
 func getEnv(key, fallback string) string {

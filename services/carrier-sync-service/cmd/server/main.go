@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -37,11 +38,11 @@ const (
 )
 
 func main() {
-	logger := log.Default()
+	logger := configureJSONLogger(serviceName)
 
 	carrierClient, err := buildCarrierClientFromEnv()
 	if err != nil {
-		log.Fatalf("%s configuration error: %v", serviceName, err)
+		logger.Fatalf("%s configuration error: %v", serviceName, err)
 	}
 
 	carrierTimeout := getDurationEnv(logger, carrierTimeoutEnvKey, defaultCarrierTimeout)
@@ -53,7 +54,7 @@ func main() {
 		trackingTimeout,
 	)
 	if err != nil {
-		log.Fatalf("%s configuration error: %v", serviceName, err)
+		logger.Fatalf("%s configuration error: %v", serviceName, err)
 	}
 
 	syncService := service.New(carrierClient)
@@ -70,7 +71,7 @@ func main() {
 	port := getEnv(portEnvKey, defaultPort)
 	addr := ":" + port
 
-	log.Printf("%s listening on %s", serviceName, addr)
+	logger.Printf("%s listening on %s", serviceName, addr)
 
 	server := &http.Server{
 		Addr:    addr,
@@ -78,8 +79,19 @@ func main() {
 	}
 
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("%s server failed: %v", serviceName, err)
+		logger.Fatalf("%s server failed: %v", serviceName, err)
 	}
+}
+
+func configureJSONLogger(service string) *log.Logger {
+	base := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", service)
+	structured := slog.NewLogLogger(base.Handler(), slog.LevelInfo)
+	structured.SetFlags(0)
+
+	log.SetFlags(0)
+	log.SetOutput(structured.Writer())
+
+	return structured
 }
 
 func buildCarrierClientFromEnv() (client.CarrierClient, error) {

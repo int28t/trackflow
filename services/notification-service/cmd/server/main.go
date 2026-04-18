@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -26,14 +27,14 @@ const (
 )
 
 func main() {
-	logger := log.Default()
+	logger := configureJSONLogger(serviceName)
 
 	provider := strings.ToLower(strings.TrimSpace(getEnv(providerEnvKey, defaultProviderMode)))
 	apiKey := strings.TrimSpace(os.Getenv(apiKeyEnvKey))
 
 	messageSender, err := buildSender(logger, provider, apiKey)
 	if err != nil {
-		log.Fatalf("%s configuration error: %v", serviceName, err)
+		logger.Fatalf("%s configuration error: %v", serviceName, err)
 	}
 
 	notificationService := service.New(messageSender).SetDedupWindow(getDurationEnv(logger, dedupWindowEnvKey, defaultDedupWindow))
@@ -42,7 +43,7 @@ func main() {
 	port := getEnv(portEnvKey, defaultPort)
 	addr := ":" + port
 
-	log.Printf("%s listening on %s", serviceName, addr)
+	logger.Printf("%s listening on %s", serviceName, addr)
 
 	httpServer := &http.Server{
 		Addr:    addr,
@@ -50,8 +51,19 @@ func main() {
 	}
 
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("%s server failed: %v", serviceName, err)
+		logger.Fatalf("%s server failed: %v", serviceName, err)
 	}
+}
+
+func configureJSONLogger(service string) *log.Logger {
+	base := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", service)
+	structured := slog.NewLogLogger(base.Handler(), slog.LevelInfo)
+	structured.SetFlags(0)
+
+	log.SetFlags(0)
+	log.SetOutput(structured.Writer())
+
+	return structured
 }
 
 func buildSender(logger *log.Logger, provider, apiKey string) (sender.Sender, error) {
