@@ -14,3 +14,10 @@ type StatusHistoryItem struct {
 	Metadata  json.RawMessage `json:"metadata,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
 }
+
+type UpdateStatusInput struct {
+	Status   string          `json:"status"`
+	Source   string          `json:"source"`
+	Comment  string          `json:"comment"`
+	Metadata json.RawMessage `json:"metadata"`
+}

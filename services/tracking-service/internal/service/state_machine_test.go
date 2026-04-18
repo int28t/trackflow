@@ -66,3 +66,44 @@ func TestValidateStatusTransitionInvalidStatus(t *testing.T) {
 		t.Fatalf("expected ErrInvalidStatus, got: %v", err)
 	}
 }
+
+func TestNormalizeStatusSource(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  string
+		want    string
+		wantErr bool
+	}{
+		{name: "system", source: SourceSystem, want: SourceSystem},
+		{name: "courier", source: SourceCourier, want: SourceCourier},
+		{name: "manager", source: SourceManager, want: SourceManager},
+		{name: "carrier", source: SourceCarrier, want: SourceCarrier},
+		{name: "normalize spaces", source: "  COURIER  ", want: SourceCourier},
+		{name: "invalid", source: "unknown", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NormalizeStatusSource(tt.source)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+
+				if !errors.Is(err, ErrInvalidStatusSource) {
+					t.Fatalf("expected ErrInvalidStatusSource, got: %v", err)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if got != tt.want {
+				t.Fatalf("expected %q, got %q", tt.want, got)
+			}
+		})
+	}
+}

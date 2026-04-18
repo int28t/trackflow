@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -15,8 +16,10 @@ import (
 )
 
 const (
-	healthTimeout = 2 * time.Second
-	readTimeout   = 3 * time.Second
+	healthTimeout         = 2 * time.Second
+	readTimeout           = 3 * time.Second
+	updateStatusTimeout   = 5 * time.Second
+	maxRequestPayloadSize = 128 * 1024
 )
 
 type Handler struct {
@@ -26,6 +29,13 @@ type Handler struct {
 
 type timelineResponse struct {
 	Items []model.StatusHistoryItem `json:"items"`
+}
+
+type updateStatusResponse struct {
+	OrderID   string    `json:"order_id"`
+	Status    string    `json:"status"`
+	Source    string    `json:"source"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type errorResponse struct {
@@ -45,6 +55,8 @@ func New(logger *log.Logger, svc *service.TrackingService) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", h.health)
 	mux.HandleFunc("/v1/orders/{order_id}/timeline", h.getOrderTimeline)
+	mux.HandleFunc("/orders/{id}/status", h.updateOrderStatus)
+	mux.HandleFunc("/v1/orders/{order_id}/status", h.updateOrderStatus)
 
 	return mux
 }
@@ -115,6 +127,73 @@ func (h *Handler) getOrderTimeline(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, timelineResponse{Items: items})
 }
 
+func (h *Handler) updateOrderStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if h.svc == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "service unavailable")
+		return
+	}
+
+	body := http.MaxBytesReader(w, r.Body, maxRequestPayloadSize)
+	defer body.Close()
+
+	var payload model.UpdateStatusInput
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&payload); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json payload")
+		return
+	}
+
+	if err := ensureSingleJSONValue(decoder); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json payload")
+		return
+	}
+
+	orderID := extractOrderID(r)
+	if orderID == "" {
+		writeJSONError(w, http.StatusBadRequest, "order_id is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), updateStatusTimeout)
+	defer cancel()
+
+	historyItem, err := h.svc.UpdateOrderStatus(ctx, orderID, payload)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			writeJSONError(w, http.StatusBadRequest, extractValidationMessage(err))
+			return
+		}
+
+		if errors.Is(err, service.ErrOrderNotFound) {
+			writeJSONError(w, http.StatusNotFound, "order not found")
+			return
+		}
+
+		if errors.Is(err, service.ErrStatusTransitionNotAllowed) {
+			writeJSONError(w, http.StatusConflict, "status transition is not allowed")
+			return
+		}
+
+		h.logger.Printf("update status failed for order %s: %v", orderID, err)
+		writeJSONError(w, http.StatusInternalServerError, "failed to update order status")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, updateStatusResponse{
+		OrderID:   historyItem.OrderID,
+		Status:    historyItem.Status,
+		Source:    historyItem.Source,
+		CreatedAt: historyItem.CreatedAt,
+	})
+}
+
 func parseLimit(raw string) (int, error) {
 	if raw == "" {
 		return 0, nil
@@ -130,6 +209,49 @@ func parseLimit(raw string) (int, error) {
 	}
 
 	return limit, nil
+}
+
+func ensureSingleJSONValue(decoder *json.Decoder) error {
+	if decoder == nil {
+		return errors.New("decoder is nil")
+	}
+
+	if err := decoder.Decode(&struct{}{}); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+
+		return err
+	}
+
+	return errors.New("multiple json values")
+}
+
+func extractOrderID(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+
+	orderID := strings.TrimSpace(r.PathValue("order_id"))
+	if orderID != "" {
+		return orderID
+	}
+
+	return strings.TrimSpace(r.PathValue("id"))
+}
+
+func extractValidationMessage(err error) string {
+	if err == nil {
+		return "invalid request"
+	}
+
+	message := err.Error()
+	prefix := service.ErrInvalidInput.Error() + ": "
+	if strings.HasPrefix(message, prefix) {
+		return strings.TrimPrefix(message, prefix)
+	}
+
+	return message
 }
 
 func isInvalidUUIDError(err error) bool {

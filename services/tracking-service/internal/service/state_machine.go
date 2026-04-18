@@ -8,6 +8,7 @@ import (
 
 var (
 	ErrInvalidStatus              = errors.New("invalid status")
+	ErrInvalidStatusSource        = errors.New("invalid status source")
 	ErrStatusTransitionNotAllowed = errors.New("status transition is not allowed")
 )
 
@@ -17,6 +18,10 @@ const (
 	StatusInTransit = "in_transit"
 	StatusDelivered = "delivered"
 	StatusCancelled = "cancelled"
+	SourceSystem    = "system"
+	SourceCourier   = "courier"
+	SourceManager   = "manager"
+	SourceCarrier   = "carrier_sync"
 )
 
 var allowedTransitions = map[string]map[string]struct{}{
@@ -33,6 +38,13 @@ var allowedTransitions = map[string]map[string]struct{}{
 	},
 	StatusDelivered: {},
 	StatusCancelled: {},
+}
+
+var allowedSources = map[string]struct{}{
+	SourceSystem:  {},
+	SourceCourier: {},
+	SourceManager: {},
+	SourceCarrier: {},
 }
 
 func NormalizeStatus(status string) (string, error) {
@@ -61,4 +73,13 @@ func ValidateStatusTransition(currentStatus, nextStatus string) error {
 	}
 
 	return fmt.Errorf("%w: %s -> %s", ErrStatusTransitionNotAllowed, current, next)
+}
+
+func NormalizeStatusSource(source string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(source))
+	if _, ok := allowedSources[normalized]; !ok {
+		return "", fmt.Errorf("%w: %s", ErrInvalidStatusSource, source)
+	}
+
+	return normalized, nil
 }
