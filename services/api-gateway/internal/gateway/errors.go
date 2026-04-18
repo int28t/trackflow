@@ -8,7 +8,10 @@ import (
 	"net/http"
 )
 
-const requestIDHeader = "X-Request-ID"
+const (
+	requestIDHeader     = "X-Request-ID"
+	correlationIDHeader = "X-Correlation-ID"
+)
 
 type contextKey string
 
@@ -96,7 +99,7 @@ func (h *ErrorHandler) Handle(w http.ResponseWriter, r *http.Request, err error)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if requestID != "" {
-		w.Header().Set(requestIDHeader, requestID)
+		setRequestIDHeaders(w.Header(), requestID)
 	}
 	w.WriteHeader(status)
 

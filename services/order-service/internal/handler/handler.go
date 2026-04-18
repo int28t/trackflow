@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"trackflow/services/order-service/internal/model"
+	"trackflow/services/order-service/internal/requestid"
 	"trackflow/services/order-service/internal/service"
 )
 
@@ -66,7 +67,7 @@ func New(logger *log.Logger, svc *service.OrderService) http.Handler {
 	mux.HandleFunc("/v1/orders/{id}", h.getOrderByID)
 	mux.HandleFunc("/v1/orders/{id}/assign", h.assignOrder)
 
-	return mux
+	return requestid.Middleware(mux)
 }
 
 func (h *Handler) orders(w http.ResponseWriter, r *http.Request) {

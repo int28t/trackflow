@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"trackflow/services/notification-service/internal/model"
+	"trackflow/services/notification-service/internal/requestid"
 	"trackflow/services/notification-service/internal/service"
 )
 
@@ -46,7 +47,7 @@ func New(logger *log.Logger, svc *service.NotificationService) http.Handler {
 	mux.HandleFunc("/health", h.health)
 	mux.HandleFunc("/internal/notifications/send", h.send)
 
-	return mux
+	return requestid.Middleware(mux)
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {

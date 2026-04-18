@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"trackflow/services/tracking-service/internal/model"
+	"trackflow/services/tracking-service/internal/requestid"
 )
 
 const (
@@ -137,6 +138,7 @@ func (c *HTTPClient) send(ctx context.Context, payload sendNotificationRequest) 
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	requestid.ApplyToRequest(req)
 
 	res, err := c.httpClient.Do(req)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -26,12 +27,12 @@ func Chain(middlewares ...Middleware) Middleware {
 func RequestID() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			requestID := r.Header.Get(requestIDHeader)
+			requestID := requestIDFromHeaders(r.Header)
 			if requestID == "" {
 				requestID = generateRequestID()
 			}
 
-			w.Header().Set(requestIDHeader, requestID)
+			setRequestIDHeaders(w.Header(), requestID)
 			ctx := context.WithValue(r.Context(), requestIDContextKey, requestID)
 
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -116,4 +117,31 @@ func generateRequestID() string {
 	}
 
 	return hex.EncodeToString(buffer[:])
+}
+
+func requestIDFromHeaders(header http.Header) string {
+	if header == nil {
+		return ""
+	}
+
+	requestID := strings.TrimSpace(header.Get(requestIDHeader))
+	if requestID != "" {
+		return requestID
+	}
+
+	return strings.TrimSpace(header.Get(correlationIDHeader))
+}
+
+func setRequestIDHeaders(header http.Header, requestID string) {
+	if header == nil {
+		return
+	}
+
+	id := strings.TrimSpace(requestID)
+	if id == "" {
+		return
+	}
+
+	header.Set(requestIDHeader, id)
+	header.Set(correlationIDHeader, id)
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"trackflow/services/tracking-service/internal/model"
+	"trackflow/services/tracking-service/internal/requestid"
 )
 
 func TestNotifyStatusChangedSendsEmailAndTelegram(t *testing.T) {
@@ -128,5 +129,46 @@ func TestNotifyStatusChangedReturnsErrorOnChannelFailure(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestNotifyStatusChangedPropagatesRequestIDHeaders(t *testing.T) {
+	t.Parallel()
+
+	const expectedRequestID = "req-tracking-123"
+
+	seen := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen++
+
+		if got := r.Header.Get(requestid.HeaderName); got != expectedRequestID {
+			t.Fatalf("unexpected %s header: got %q, want %q", requestid.HeaderName, got, expectedRequestID)
+		}
+
+		if got := r.Header.Get(requestid.CorrelationHeaderName); got != expectedRequestID {
+			t.Fatalf("unexpected %s header: got %q, want %q", requestid.CorrelationHeaderName, got, expectedRequestID)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client, err := NewHTTPClient(log.New(io.Discard, "", 0), server.URL, time.Second, "user@example.com", "@trackflow_user")
+	if err != nil {
+		t.Fatalf("NewHTTPClient returned error: %v", err)
+	}
+
+	ctx := requestid.WithRequestID(context.Background(), expectedRequestID)
+	err = client.NotifyStatusChanged(ctx, model.StatusHistoryItem{
+		OrderID:   "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Status:    "in_transit",
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("NotifyStatusChanged returned error: %v", err)
+	}
+
+	if seen != 2 {
+		t.Fatalf("expected 2 notification requests, got %d", seen)
 	}
 }

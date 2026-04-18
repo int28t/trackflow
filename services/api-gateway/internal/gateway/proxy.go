@@ -162,8 +162,11 @@ func (p *GatewayProxy) forward(w http.ResponseWriter, r *http.Request, base *url
 	upstreamReq.ContentLength = r.ContentLength
 
 	requestID := getRequestID(r.Context())
+	if requestID == "" {
+		requestID = requestIDFromHeaders(r.Header)
+	}
 	if requestID != "" {
-		upstreamReq.Header.Set(requestIDHeader, requestID)
+		setRequestIDHeaders(upstreamReq.Header, requestID)
 	}
 
 	upstreamResp, err := p.client.Do(upstreamReq)

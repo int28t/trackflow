@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"trackflow/services/tracking-service/internal/model"
+	"trackflow/services/tracking-service/internal/requestid"
 	"trackflow/services/tracking-service/internal/service"
 )
 
@@ -59,7 +60,7 @@ func New(logger *log.Logger, svc *service.TrackingService) http.Handler {
 	mux.HandleFunc("/orders/{id}/status", h.updateOrderStatus)
 	mux.HandleFunc("/v1/orders/{order_id}/status", h.updateOrderStatus)
 
-	return mux
+	return requestid.Middleware(mux)
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {

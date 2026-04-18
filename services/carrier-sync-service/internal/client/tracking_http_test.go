@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"trackflow/services/carrier-sync-service/internal/model"
+	"trackflow/services/carrier-sync-service/internal/requestid"
 )
 
 func TestPushStatusUpdateMapsStatusAndSendsMetadata(t *testing.T) {
@@ -102,5 +103,39 @@ func TestPushStatusUpdateUnknownExternalStatus(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "map external status") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPushStatusUpdatePropagatesRequestIDHeaders(t *testing.T) {
+	t.Parallel()
+
+	const expectedRequestID = "req-carrier-123"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(requestid.HeaderName); got != expectedRequestID {
+			t.Fatalf("unexpected %s header: got %q, want %q", requestid.HeaderName, got, expectedRequestID)
+		}
+
+		if got := r.Header.Get(requestid.CorrelationHeaderName); got != expectedRequestID {
+			t.Fatalf("unexpected %s header: got %q, want %q", requestid.CorrelationHeaderName, got, expectedRequestID)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	httpClient, err := NewTrackingHTTPClient(log.New(io.Discard, "", 0), server.URL, time.Second)
+	if err != nil {
+		t.Fatalf("NewTrackingHTTPClient returned error: %v", err)
+	}
+
+	ctx := requestid.WithRequestID(context.Background(), expectedRequestID)
+	err = httpClient.PushStatusUpdate(ctx, model.StatusUpdate{
+		OrderID:        "order-1",
+		ExternalStatus: "out-for-delivery",
+		UpdatedAt:      time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("PushStatusUpdate returned error: %v", err)
 	}
 }

@@ -15,6 +15,7 @@ import (
 
 	"trackflow/services/carrier-sync-service/internal/mapping"
 	"trackflow/services/carrier-sync-service/internal/model"
+	"trackflow/services/carrier-sync-service/internal/requestid"
 )
 
 const (
@@ -111,6 +112,7 @@ func (c *TrackingHTTPClient) PushStatusUpdate(ctx context.Context, update model.
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	requestid.ApplyToRequest(req)
 
 	res, err := c.client.Do(req)
 	if err != nil {
