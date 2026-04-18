@@ -18,6 +18,8 @@ const (
 	defaultRetryBaseBackoff  = 200 * time.Millisecond
 	defaultRetryMaxBackoff   = 3 * time.Second
 	defaultRetryJitterFactor = 0.2
+	defaultCarrierTimeout    = 5 * time.Second
+	defaultTrackingTimeout   = 5 * time.Second
 )
 
 type Worker struct {
@@ -31,6 +33,8 @@ type Worker struct {
 	retryBaseBackoff  time.Duration
 	retryMaxBackoff   time.Duration
 	retryJitterFactor float64
+	carrierTimeout    time.Duration
+	trackingTimeout   time.Duration
 	sleepFn           func(context.Context, time.Duration) error
 	randFloat64       func() float64
 }
@@ -61,9 +65,30 @@ func New(logger *log.Logger, svc *service.SyncService, trackingClient client.Tra
 		retryBaseBackoff:  defaultRetryBaseBackoff,
 		retryMaxBackoff:   defaultRetryMaxBackoff,
 		retryJitterFactor: defaultRetryJitterFactor,
+		carrierTimeout:    defaultCarrierTimeout,
+		trackingTimeout:   defaultTrackingTimeout,
 		sleepFn:           sleepWithContext,
 		randFloat64:       randomizer.Float64,
 	}
+}
+
+func (w *Worker) SetCallTimeouts(carrierTimeout, trackingTimeout time.Duration) *Worker {
+	if w == nil {
+		return nil
+	}
+
+	if carrierTimeout <= 0 {
+		carrierTimeout = defaultCarrierTimeout
+	}
+
+	if trackingTimeout <= 0 {
+		trackingTimeout = defaultTrackingTimeout
+	}
+
+	w.carrierTimeout = carrierTimeout
+	w.trackingTimeout = trackingTimeout
+
+	return w
 }
 
 func (w *Worker) Start(ctx context.Context) {
@@ -82,10 +107,12 @@ func (w *Worker) Start(ctx context.Context) {
 	}
 
 	w.logger.Printf(
-		"carrier sync worker started: interval=%s batch_size=%d retry_max_attempts=%d",
+		"carrier sync worker started: interval=%s batch_size=%d retry_max_attempts=%d carrier_timeout=%s tracking_timeout=%s",
 		w.interval,
 		w.batchSize,
 		w.retryMaxAttempts,
+		w.carrierTimeout,
+		w.trackingTimeout,
 	)
 	w.runOnce(ctx)
 
@@ -136,7 +163,10 @@ func (w *Worker) fetchUpdatesWithRetry(ctx context.Context) ([]model.StatusUpdat
 	updates := make([]model.StatusUpdate, 0)
 
 	err := w.withRetry(ctx, "carrier updates fetch", func() error {
-		fetched, fetchErr := w.svc.SyncOnce(ctx, w.batchSize)
+		attemptCtx, cancel := withOptionalTimeout(ctx, w.carrierTimeout)
+		defer cancel()
+
+		fetched, fetchErr := w.svc.SyncOnce(attemptCtx, w.batchSize)
 		if fetchErr != nil {
 			return fetchErr
 		}
@@ -153,7 +183,10 @@ func (w *Worker) fetchUpdatesWithRetry(ctx context.Context) ([]model.StatusUpdat
 
 func (w *Worker) pushUpdateWithRetry(ctx context.Context, update model.StatusUpdate) error {
 	return w.withRetry(ctx, "carrier update push", func() error {
-		return w.trackingClient.PushStatusUpdate(ctx, update)
+		attemptCtx, cancel := withOptionalTimeout(ctx, w.trackingTimeout)
+		defer cancel()
+
+		return w.trackingClient.PushStatusUpdate(attemptCtx, update)
 	})
 }
 
@@ -285,4 +318,12 @@ func sleepWithContext(ctx context.Context, duration time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func withOptionalTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+
+	return context.WithTimeout(ctx, timeout)
 }

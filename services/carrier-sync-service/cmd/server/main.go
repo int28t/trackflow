@@ -22,7 +22,9 @@ const (
 	clientModeEnvKey          = "CARRIER_CLIENT_MODE"
 	carrierBaseURLEnvKey      = "CARRIER_API_BASE_URL"
 	carrierTokenEnvKey        = "CARRIER_API_TOKEN"
+	carrierTimeoutEnvKey      = "CARRIER_REQUEST_TIMEOUT"
 	trackingServiceURLEnvKey  = "TRACKING_SERVICE_URL"
+	trackingTimeoutEnvKey     = "TRACKING_REQUEST_TIMEOUT"
 	syncIntervalEnvKey        = "CARRIER_SYNC_INTERVAL"
 	defaultPort               = "8084"
 	defaultClientMode         = "mock"
@@ -30,7 +32,8 @@ const (
 	defaultTrackingServiceURL = "http://tracking-service:8083"
 	defaultSyncInterval       = 30 * time.Second
 	defaultClientBatchSize    = 5
-	trackingRequestTimeout    = 5 * time.Second
+	defaultCarrierTimeout     = 5 * time.Second
+	defaultTrackingTimeout    = 5 * time.Second
 )
 
 func main() {
@@ -41,17 +44,22 @@ func main() {
 		log.Fatalf("%s configuration error: %v", serviceName, err)
 	}
 
+	carrierTimeout := getDurationEnv(logger, carrierTimeoutEnvKey, defaultCarrierTimeout)
+	trackingTimeout := getDurationEnv(logger, trackingTimeoutEnvKey, defaultTrackingTimeout)
+
 	trackingClient, err := client.NewTrackingHTTPClient(
 		logger,
 		getEnv(trackingServiceURLEnvKey, defaultTrackingServiceURL),
-		trackingRequestTimeout,
+		trackingTimeout,
 	)
 	if err != nil {
 		log.Fatalf("%s configuration error: %v", serviceName, err)
 	}
 
 	syncService := service.New(carrierClient)
-	syncWorker := worker.New(logger, syncService, trackingClient, getSyncInterval(logger), defaultClientBatchSize)
+	syncWorker := worker.
+		New(logger, syncService, trackingClient, getSyncInterval(logger), defaultClientBatchSize).
+		SetCallTimeouts(carrierTimeout, trackingTimeout)
 	router := handler.New(logger, syncService)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -88,18 +96,22 @@ func buildCarrierClientFromEnv() (client.CarrierClient, error) {
 }
 
 func getSyncInterval(logger *log.Logger) time.Duration {
-	raw := strings.TrimSpace(os.Getenv(syncIntervalEnvKey))
+	return getDurationEnv(logger, syncIntervalEnvKey, defaultSyncInterval)
+}
+
+func getDurationEnv(logger *log.Logger, key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
-		return defaultSyncInterval
+		return fallback
 	}
 
-	interval, err := time.ParseDuration(raw)
-	if err != nil || interval <= 0 {
-		logger.Printf("invalid %s=%q, fallback to %s", syncIntervalEnvKey, raw, defaultSyncInterval)
-		return defaultSyncInterval
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		logger.Printf("invalid %s=%q, fallback to %s", key, raw, fallback)
+		return fallback
 	}
 
-	return interval
+	return value
 }
 
 func getEnv(key, fallback string) string {

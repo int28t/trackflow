@@ -41,6 +41,26 @@ func (c *stubTrackingClient) PushStatusUpdate(_ context.Context, _ model.StatusU
 	return nil
 }
 
+type blockingCarrierClient struct {
+	calls int
+}
+
+func (c *blockingCarrierClient) FetchStatusUpdates(ctx context.Context, _ int) ([]model.StatusUpdate, error) {
+	c.calls++
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+type blockingTrackingClient struct {
+	calls int
+}
+
+func (c *blockingTrackingClient) PushStatusUpdate(ctx context.Context, _ model.StatusUpdate) error {
+	c.calls++
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func TestWorkerRetriesFetchWithExponentialBackoff(t *testing.T) {
 	t.Parallel()
 
@@ -152,5 +172,55 @@ func TestBackoffDelayAppliesJitter(t *testing.T) {
 	want := 300 * time.Millisecond
 	if got != want {
 		t.Fatalf("jittered backoff mismatch: got %s, want %s", got, want)
+	}
+}
+
+func TestWorkerUsesCarrierTimeout(t *testing.T) {
+	t.Parallel()
+
+	carrierClient := &blockingCarrierClient{}
+	trackingClient := &stubTrackingClient{}
+	syncService := service.New(carrierClient)
+
+	worker := New(log.New(io.Discard, "", 0), syncService, trackingClient, time.Second, 1)
+	worker.retryMaxAttempts = 1
+	worker.carrierTimeout = 20 * time.Millisecond
+
+	start := time.Now()
+	worker.runOnce(context.Background())
+	elapsed := time.Since(start)
+
+	if carrierClient.calls != 1 {
+		t.Fatalf("unexpected carrier fetch calls: got %d, want %d", carrierClient.calls, 1)
+	}
+
+	if elapsed > 300*time.Millisecond {
+		t.Fatalf("carrier timeout was not applied, elapsed=%s", elapsed)
+	}
+}
+
+func TestWorkerUsesTrackingTimeout(t *testing.T) {
+	t.Parallel()
+
+	carrierClient := &stubCarrierClient{
+		updates: []model.StatusUpdate{{OrderID: "order-1", ExternalStatus: "created"}},
+	}
+	trackingClient := &blockingTrackingClient{}
+	syncService := service.New(carrierClient)
+
+	worker := New(log.New(io.Discard, "", 0), syncService, trackingClient, time.Second, 1)
+	worker.retryMaxAttempts = 1
+	worker.trackingTimeout = 20 * time.Millisecond
+
+	start := time.Now()
+	worker.runOnce(context.Background())
+	elapsed := time.Since(start)
+
+	if trackingClient.calls != 1 {
+		t.Fatalf("unexpected tracking push calls: got %d, want %d", trackingClient.calls, 1)
+	}
+
+	if elapsed > 300*time.Millisecond {
+		t.Fatalf("tracking timeout was not applied, elapsed=%s", elapsed)
 	}
 }

@@ -1,10 +1,13 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,15 +18,17 @@ import (
 const (
 	orderServiceURLEnvKey     = "ORDER_SERVICE_URL"
 	trackingServiceURLEnvKey  = "TRACKING_SERVICE_URL"
+	upstreamTimeoutEnvKey     = "UPSTREAM_REQUEST_TIMEOUT"
 	defaultOrderServiceURL    = "http://order-service:8082"
 	defaultTrackingServiceURL = "http://tracking-service:8083"
-	upstreamRequestTimeout    = 10 * time.Second
+	defaultUpstreamTimeout    = 10 * time.Second
 	maxUpstreamErrorBodySize  = 64 * 1024
 )
 
 type GatewayProxy struct {
 	logger       *log.Logger
 	client       *http.Client
+	timeout      time.Duration
 	orderBase    *url.URL
 	trackingBase *url.URL
 }
@@ -33,9 +38,12 @@ func NewGatewayProxy(logger *log.Logger) *GatewayProxy {
 		logger = log.Default()
 	}
 
+	timeout := parseDurationEnv(logger, upstreamTimeoutEnvKey, os.Getenv(upstreamTimeoutEnvKey), defaultUpstreamTimeout)
+
 	return &GatewayProxy{
-		logger: logger,
-		client: &http.Client{Timeout: upstreamRequestTimeout},
+		logger:  logger,
+		client:  &http.Client{Timeout: timeout},
+		timeout: timeout,
 		orderBase: parseServiceURL(
 			logger,
 			orderServiceURLEnvKey,
@@ -137,8 +145,15 @@ func (p *GatewayProxy) forward(w http.ResponseWriter, r *http.Request, base *url
 	}
 
 	targetURL := buildTargetURL(base, r.URL.Path, r.URL.RawQuery)
+	requestTimeout := p.timeout
+	if requestTimeout <= 0 {
+		requestTimeout = defaultUpstreamTimeout
+	}
 
-	upstreamReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL.String(), r.Body)
+	requestCtx, cancel := context.WithTimeout(r.Context(), requestTimeout)
+	defer cancel()
+
+	upstreamReq, err := http.NewRequestWithContext(requestCtx, r.Method, targetURL.String(), r.Body)
 	if err != nil {
 		return NewHTTPError(http.StatusBadGateway, "upstream_request_error", "failed to prepare upstream request", err)
 	}
@@ -153,6 +168,10 @@ func (p *GatewayProxy) forward(w http.ResponseWriter, r *http.Request, base *url
 
 	upstreamResp, err := p.client.Do(upstreamReq)
 	if err != nil {
+		if isTimeoutError(err) || errors.Is(requestCtx.Err(), context.DeadlineExceeded) {
+			return NewHTTPError(http.StatusGatewayTimeout, "gateway_timeout", "upstream request timeout", err)
+		}
+
 		return NewHTTPError(http.StatusBadGateway, "upstream_unavailable", "upstream service is unavailable", err)
 	}
 	defer upstreamResp.Body.Close()
@@ -343,6 +362,34 @@ func parseServiceURL(logger *log.Logger, envKey, value, fallback string) *url.UR
 	logger.Printf("invalid %s=%q, fallback to %q", envKey, value, fallback)
 	parsedFallback, _ := url.Parse(fallback)
 	return parsedFallback
+}
+
+func parseDurationEnv(logger *log.Logger, envKey, value string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return fallback
+	}
+
+	parsed, err := time.ParseDuration(raw)
+	if err == nil && parsed > 0 {
+		return parsed
+	}
+
+	logger.Printf("invalid %s=%q, fallback to %s", envKey, value, fallback)
+	return fallback
+}
+
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func cloneHeader(source http.Header) http.Header {
