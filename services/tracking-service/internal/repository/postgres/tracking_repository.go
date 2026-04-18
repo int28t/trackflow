@@ -24,6 +24,14 @@ ORDER BY created_at ASC
 LIMIT $2
 `
 
+const orderExistsQuery = `
+SELECT EXISTS(
+	SELECT 1
+	FROM orders
+	WHERE id = $1::uuid
+)
+`
+
 const selectOrderStatusForUpdateQuery = `
 SELECT status::text
 FROM orders
@@ -126,6 +134,17 @@ func (r *TrackingRepository) GetOrderTimeline(ctx context.Context, orderID strin
 		return nil, err
 	}
 
+	if len(items) == 0 {
+		exists, err := r.orderExists(ctx, orderID)
+		if err != nil {
+			return nil, err
+		}
+
+		if !exists {
+			return nil, service.ErrOrderNotFound
+		}
+	}
+
 	return items, nil
 }
 
@@ -205,4 +224,15 @@ func scanStatusHistoryItem(row rowScanner) (model.StatusHistoryItem, error) {
 	}
 
 	return item, nil
+}
+
+func (r *TrackingRepository) orderExists(ctx context.Context, orderID string) (bool, error) {
+	row := r.db.QueryRowContext(ctx, orderExistsQuery, orderID)
+
+	var exists bool
+	if err := row.Scan(&exists); err != nil {
+		return false, err
+	}
+
+	return exists, nil
 }

@@ -48,7 +48,16 @@ func (s *TrackingService) GetOrderTimeline(ctx context.Context, orderID string, 
 		return nil, errors.New("repository is not configured")
 	}
 
-	return s.repo.GetOrderTimeline(ctx, orderID, normalizeLimit(limit))
+	id := strings.TrimSpace(orderID)
+	if id == "" {
+		return nil, validationError("order_id is required")
+	}
+
+	if !uuidPattern.MatchString(id) {
+		return nil, validationError("order_id must be a valid UUID")
+	}
+
+	return s.repo.GetOrderTimeline(ctx, id, normalizeLimit(limit))
 }
 
 func (s *TrackingService) UpdateOrderStatus(ctx context.Context, orderID string, input model.UpdateStatusInput) (model.StatusHistoryItem, error) {

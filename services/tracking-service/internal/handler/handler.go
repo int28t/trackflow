@@ -54,6 +54,7 @@ func New(logger *log.Logger, svc *service.TrackingService) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", h.health)
+	mux.HandleFunc("/orders/{id}/timeline", h.getOrderTimeline)
 	mux.HandleFunc("/v1/orders/{order_id}/timeline", h.getOrderTimeline)
 	mux.HandleFunc("/orders/{id}/status", h.updateOrderStatus)
 	mux.HandleFunc("/v1/orders/{order_id}/status", h.updateOrderStatus)
@@ -97,7 +98,7 @@ func (h *Handler) getOrderTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	orderID := strings.TrimSpace(r.PathValue("order_id"))
+	orderID := extractOrderID(r)
 	if orderID == "" {
 		writeJSONError(w, http.StatusBadRequest, "order_id is required")
 		return
@@ -114,6 +115,16 @@ func (h *Handler) getOrderTimeline(w http.ResponseWriter, r *http.Request) {
 
 	items, err := h.svc.GetOrderTimeline(ctx, orderID, limit)
 	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			writeJSONError(w, http.StatusBadRequest, extractValidationMessage(err))
+			return
+		}
+
+		if errors.Is(err, service.ErrOrderNotFound) {
+			writeJSONError(w, http.StatusNotFound, "order not found")
+			return
+		}
+
 		if isInvalidUUIDError(err) {
 			writeJSONError(w, http.StatusBadRequest, "order_id must be a valid UUID")
 			return
