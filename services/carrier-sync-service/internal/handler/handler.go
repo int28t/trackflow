@@ -24,8 +24,10 @@ type Handler struct {
 }
 
 type syncResponse struct {
-	Fetched int                  `json:"fetched"`
-	Items   []model.StatusUpdate `json:"items"`
+	Fetched      int                  `json:"fetched"`
+	Items        []model.StatusUpdate `json:"items"`
+	StatusSource string               `json:"status_source"`
+	FallbackUsed bool                 `json:"fallback_used"`
 }
 
 type errorResponse struct {
@@ -94,14 +96,23 @@ func (h *Handler) runSync(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), syncTimeout)
 	defer cancel()
 
-	updates, err := h.svc.SyncOnce(ctx, batch)
+	result, err := h.svc.SyncOnceWithFallback(ctx, batch)
 	if err != nil {
 		h.logger.Printf("manual sync run failed: %v", err)
 		writeJSONError(w, http.StatusInternalServerError, "sync run failed")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, syncResponse{Fetched: len(updates), Items: updates})
+	if result.FallbackUsed {
+		h.logger.Printf("manual sync run fallback used: status_source=%s fetched=%d", result.StatusSource, len(result.Updates))
+	}
+
+	writeJSON(w, http.StatusOK, syncResponse{
+		Fetched:      len(result.Updates),
+		Items:        result.Updates,
+		StatusSource: result.StatusSource,
+		FallbackUsed: result.FallbackUsed,
+	})
 }
 
 func parseBatch(raw string) (int, error) {

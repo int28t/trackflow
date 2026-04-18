@@ -61,6 +61,34 @@ func (c *blockingTrackingClient) PushStatusUpdate(ctx context.Context, _ model.S
 	return ctx.Err()
 }
 
+type carrierResponse struct {
+	updates []model.StatusUpdate
+	err     error
+}
+
+type sequenceCarrierClient struct {
+	responses []carrierResponse
+	idx       int
+	calls     int
+}
+
+func (c *sequenceCarrierClient) FetchStatusUpdates(_ context.Context, _ int) ([]model.StatusUpdate, error) {
+	c.calls++
+	if len(c.responses) == 0 {
+		return nil, nil
+	}
+
+	if c.idx >= len(c.responses) {
+		last := c.responses[len(c.responses)-1]
+		return last.updates, last.err
+	}
+
+	current := c.responses[c.idx]
+	c.idx++
+
+	return current.updates, current.err
+}
+
 func TestWorkerRetriesFetchWithExponentialBackoff(t *testing.T) {
 	t.Parallel()
 
@@ -222,5 +250,37 @@ func TestWorkerUsesTrackingTimeout(t *testing.T) {
 
 	if elapsed > 300*time.Millisecond {
 		t.Fatalf("tracking timeout was not applied, elapsed=%s", elapsed)
+	}
+}
+
+func TestWorkerUsesLastKnownFallbackWithoutPush(t *testing.T) {
+	t.Parallel()
+
+	carrierClient := &sequenceCarrierClient{
+		responses: []carrierResponse{
+			{
+				updates: []model.StatusUpdate{{OrderID: "order-1", ExternalStatus: "created"}},
+			},
+			{
+				err: errors.New("carrier unavailable"),
+			},
+		},
+	}
+
+	trackingClient := &stubTrackingClient{}
+	syncService := service.New(carrierClient)
+
+	worker := New(log.New(io.Discard, "", 0), syncService, trackingClient, time.Second, 1)
+	worker.retryMaxAttempts = 1
+
+	worker.runOnce(context.Background())
+	worker.runOnce(context.Background())
+
+	if carrierClient.calls != 2 {
+		t.Fatalf("unexpected carrier fetch calls: got %d, want %d", carrierClient.calls, 2)
+	}
+
+	if trackingClient.calls != 1 {
+		t.Fatalf("unexpected tracking push calls: got %d, want %d", trackingClient.calls, 1)
 	}
 }

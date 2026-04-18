@@ -131,9 +131,14 @@ func (w *Worker) Start(ctx context.Context) {
 }
 
 func (w *Worker) runOnce(ctx context.Context) {
-	updates, err := w.fetchUpdatesWithRetry(ctx)
+	updates, fallbackUsed, err := w.fetchUpdatesWithRetry(ctx)
 	if err != nil {
 		w.logger.Printf("carrier sync cycle failed: %v", err)
+		return
+	}
+
+	if fallbackUsed {
+		w.logger.Printf("carrier sync cycle completed with fallback: fetched=%d status_source=%s", len(updates), service.StatusSourceLastKnown)
 		return
 	}
 
@@ -159,7 +164,7 @@ func (w *Worker) runOnce(ctx context.Context) {
 	w.logger.Printf("carrier sync cycle completed: fetched=%d synced=%d failed=%d", len(updates), synced, failed)
 }
 
-func (w *Worker) fetchUpdatesWithRetry(ctx context.Context) ([]model.StatusUpdate, error) {
+func (w *Worker) fetchUpdatesWithRetry(ctx context.Context) ([]model.StatusUpdate, bool, error) {
 	updates := make([]model.StatusUpdate, 0)
 
 	err := w.withRetry(ctx, "carrier updates fetch", func() error {
@@ -174,11 +179,23 @@ func (w *Worker) fetchUpdatesWithRetry(ctx context.Context) ([]model.StatusUpdat
 		updates = fetched
 		return nil
 	})
-	if err != nil {
-		return nil, err
+	if err == nil {
+		return updates, false, nil
 	}
 
-	return updates, nil
+	lastKnown := w.svc.LastKnownStatuses(w.batchSize)
+	if len(lastKnown) == 0 {
+		return nil, false, err
+	}
+
+	w.logger.Printf(
+		"carrier updates fetch failed, fallback to last known statuses: fetched=%d status_source=%s err=%v",
+		len(lastKnown),
+		service.StatusSourceLastKnown,
+		err,
+	)
+
+	return lastKnown, true, nil
 }
 
 func (w *Worker) pushUpdateWithRetry(ctx context.Context, update model.StatusUpdate) error {
