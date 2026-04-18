@@ -19,6 +19,7 @@ const (
 	healthTimeout         = 2 * time.Second
 	listTimeout           = 3 * time.Second
 	getOrderTimeout       = 3 * time.Second
+	assignOrderTimeout    = 5 * time.Second
 	createOrderTimeout    = 5 * time.Second
 	maxRequestPayloadSize = 128 * 1024
 )
@@ -33,6 +34,11 @@ type listOrdersResponse struct {
 }
 
 type createOrderResponse struct {
+	OrderID string `json:"order_id"`
+	Status  string `json:"status"`
+}
+
+type assignOrderResponse struct {
 	OrderID string `json:"order_id"`
 	Status  string `json:"status"`
 }
@@ -55,8 +61,10 @@ func New(logger *log.Logger, svc *service.OrderService) http.Handler {
 	mux.HandleFunc("/health", h.health)
 	mux.HandleFunc("/orders", h.createOrder)
 	mux.HandleFunc("/orders/{id}", h.getOrderByID)
+	mux.HandleFunc("/orders/{id}/assign", h.assignOrder)
 	mux.HandleFunc("/v1/orders", h.orders)
 	mux.HandleFunc("/v1/orders/{id}", h.getOrderByID)
+	mux.HandleFunc("/v1/orders/{id}/assign", h.assignOrder)
 
 	return mux
 }
@@ -216,6 +224,77 @@ func (h *Handler) getOrderByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, order)
+}
+
+func (h *Handler) assignOrder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if h.svc == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "service unavailable")
+		return
+	}
+
+	body := http.MaxBytesReader(w, r.Body, maxRequestPayloadSize)
+	defer body.Close()
+
+	var payload model.AssignOrderInput
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&payload); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json payload")
+		return
+	}
+
+	if err := ensureSingleJSONValue(decoder); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid json payload")
+		return
+	}
+
+	orderID := strings.TrimSpace(r.PathValue("id"))
+
+	ctx, cancel := context.WithTimeout(r.Context(), assignOrderTimeout)
+	defer cancel()
+
+	order, err := h.svc.AssignOrder(ctx, orderID, payload)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			writeJSONError(w, http.StatusBadRequest, extractValidationMessage(err))
+			return
+		}
+
+		if errors.Is(err, service.ErrOrderNotFound) {
+			writeJSONError(w, http.StatusNotFound, "order not found")
+			return
+		}
+
+		if errors.Is(err, service.ErrCourierNotFound) {
+			writeJSONError(w, http.StatusNotFound, "courier not found")
+			return
+		}
+
+		if errors.Is(err, service.ErrOrderAlreadyAssigned) {
+			writeJSONError(w, http.StatusConflict, "order already assigned")
+			return
+		}
+
+		if errors.Is(err, service.ErrAssignmentNotAllowed) {
+			writeJSONError(w, http.StatusConflict, "assignment is not allowed for current order status")
+			return
+		}
+
+		h.logger.Printf("assign order failed: %v", err)
+		writeJSONError(w, http.StatusInternalServerError, "failed to assign order")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, assignOrderResponse{
+		OrderID: order.ID,
+		Status:  order.Status,
+	})
 }
 
 func parseLimit(raw string) (int, error) {

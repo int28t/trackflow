@@ -27,3 +27,9 @@ type CreateOrderInput struct {
 	DistanceKM     float64      `json:"distance_km"`
 	ServiceLevel   string       `json:"service_level"`
 }
+
+type AssignOrderInput struct {
+	CourierID  string `json:"courier_id"`
+	AssignedBy string `json:"assigned_by"`
+	Comment    string `json:"comment"`
+}

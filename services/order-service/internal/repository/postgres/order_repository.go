@@ -48,6 +48,66 @@ WHERE idempotency_key = $1
 LIMIT 1
 `
 
+const selectOrderStatusForUpdateQuery = `
+SELECT status::text
+FROM orders
+WHERE id = $1::uuid
+FOR UPDATE
+`
+
+const isCourierActiveQuery = `
+SELECT EXISTS(
+	SELECT 1
+	FROM couriers
+	WHERE id = $1::uuid AND is_active = TRUE
+)
+`
+
+const insertAssignmentQuery = `
+INSERT INTO assignments (
+	order_id,
+	courier_id,
+	assigned_by,
+	comment
+)
+VALUES (
+	$1::uuid,
+	$2::uuid,
+	NULLIF($3, ''),
+	NULLIF($4, '')
+)
+`
+
+const updateOrderStatusToAssignedQuery = `
+UPDATE orders
+SET status = 'assigned',
+	last_status_at = NOW()
+WHERE id = $1::uuid
+RETURNING
+	id::text,
+	customer_id::text,
+	status::text,
+	created_at,
+	updated_at
+`
+
+const insertAssignedStatusHistoryQuery = `
+INSERT INTO order_status_history (
+	order_id,
+	status,
+	source,
+	comment,
+	metadata
+)
+VALUES (
+	$1::uuid,
+	'assigned',
+	'manager',
+	NULLIF($2, ''),
+	jsonb_build_object('courier_id', $3::uuid)
+)
+`
+
 const insertAddressQuery = `
 INSERT INTO addresses (
 	city,
@@ -142,6 +202,94 @@ func (r *OrderRepository) GetOrderByID(ctx context.Context, orderID string) (mod
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Order{}, service.ErrOrderNotFound
+		}
+
+		return model.Order{}, err
+	}
+
+	return order, nil
+}
+
+func (r *OrderRepository) AssignOrder(ctx context.Context, orderID string, input model.AssignOrderInput) (model.Order, error) {
+	if r == nil || r.db == nil {
+		return model.Order{}, errors.New("database is not configured")
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Order{}, err
+	}
+
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var currentStatus string
+	statusRow := tx.QueryRowContext(ctx, selectOrderStatusForUpdateQuery, orderID)
+	if err := statusRow.Scan(&currentStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.Order{}, service.ErrOrderNotFound
+		}
+
+		return model.Order{}, err
+	}
+
+	if currentStatus == "assigned" {
+		return model.Order{}, service.ErrOrderAlreadyAssigned
+	}
+
+	if currentStatus != "created" {
+		return model.Order{}, service.ErrAssignmentNotAllowed
+	}
+
+	var courierActive bool
+	courierRow := tx.QueryRowContext(ctx, isCourierActiveQuery, input.CourierID)
+	if err := courierRow.Scan(&courierActive); err != nil {
+		return model.Order{}, err
+	}
+
+	if !courierActive {
+		return model.Order{}, service.ErrCourierNotFound
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		insertAssignmentQuery,
+		orderID,
+		input.CourierID,
+		input.AssignedBy,
+		input.Comment,
+	); err != nil {
+		if isAssignmentConflict(err) {
+			return model.Order{}, service.ErrOrderAlreadyAssigned
+		}
+
+		return model.Order{}, err
+	}
+
+	orderRow := tx.QueryRowContext(ctx, updateOrderStatusToAssignedQuery, orderID)
+	order, err := scanOrder(orderRow)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.Order{}, service.ErrOrderNotFound
+		}
+
+		return model.Order{}, err
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		insertAssignedStatusHistoryQuery,
+		orderID,
+		input.Comment,
+		input.CourierID,
+	); err != nil {
+		return model.Order{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		if isAssignmentConflict(err) {
+			return model.Order{}, service.ErrOrderAlreadyAssigned
 		}
 
 		return model.Order{}, err
@@ -279,4 +427,21 @@ func isIdempotencyConflict(err error) bool {
 	}
 
 	return strings.EqualFold(pgErr.ConstraintName, "uq_orders_idempotency_key")
+}
+
+func isAssignmentConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+
+	if pgErr.Code != "23505" {
+		return false
+	}
+
+	return strings.EqualFold(pgErr.ConstraintName, "uq_assignments_order_id")
 }

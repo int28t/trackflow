@@ -18,6 +18,9 @@ const (
 
 var (
 	ErrOrderNotFound        = errors.New("order not found")
+	ErrCourierNotFound      = errors.New("courier not found")
+	ErrOrderAlreadyAssigned = errors.New("order already assigned")
+	ErrAssignmentNotAllowed = errors.New("assignment not allowed")
 	ErrDuplicateIdempotency = errors.New("duplicate idempotency key")
 	ErrInvalidInput         = errors.New("invalid input")
 	uuidPattern             = regexp.MustCompile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -27,6 +30,7 @@ type Repository interface {
 	Ping(ctx context.Context) error
 	ListOrders(ctx context.Context, limit int) ([]model.Order, error)
 	GetOrderByID(ctx context.Context, orderID string) (model.Order, error)
+	AssignOrder(ctx context.Context, orderID string, input model.AssignOrderInput) (model.Order, error)
 	CreateOrder(ctx context.Context, input model.CreateOrderInput, idempotencyKey string) (model.Order, error)
 	GetOrderByIdempotencyKey(ctx context.Context, idempotencyKey string) (model.Order, error)
 }
@@ -70,6 +74,28 @@ func (s *OrderService) GetOrderByID(ctx context.Context, orderID string) (model.
 	}
 
 	return s.repo.GetOrderByID(ctx, id)
+}
+
+func (s *OrderService) AssignOrder(ctx context.Context, orderID string, input model.AssignOrderInput) (model.Order, error) {
+	if s == nil || s.repo == nil {
+		return model.Order{}, errors.New("repository is not configured")
+	}
+
+	id := strings.TrimSpace(orderID)
+	if id == "" {
+		return model.Order{}, validationError("order_id is required")
+	}
+
+	if !uuidPattern.MatchString(id) {
+		return model.Order{}, validationError("order_id must be a valid UUID")
+	}
+
+	normalizedInput, err := normalizeAssignInput(input)
+	if err != nil {
+		return model.Order{}, err
+	}
+
+	return s.repo.AssignOrder(ctx, id, normalizedInput)
 }
 
 func (s *OrderService) CreateOrder(ctx context.Context, input model.CreateOrderInput, idempotencyKey string) (model.Order, bool, error) {
@@ -164,6 +190,24 @@ func normalizeCreateInput(input model.CreateOrderInput) (model.CreateOrderInput,
 	if normalized.ServiceLevel != "standard" && normalized.ServiceLevel != "express" {
 		return model.CreateOrderInput{}, validationError("service_level must be one of: standard, express")
 	}
+
+	return normalized, nil
+}
+
+func normalizeAssignInput(input model.AssignOrderInput) (model.AssignOrderInput, error) {
+	normalized := input
+
+	normalized.CourierID = strings.TrimSpace(normalized.CourierID)
+	if normalized.CourierID == "" {
+		return model.AssignOrderInput{}, validationError("courier_id is required")
+	}
+
+	if !uuidPattern.MatchString(normalized.CourierID) {
+		return model.AssignOrderInput{}, validationError("courier_id must be a valid UUID")
+	}
+
+	normalized.AssignedBy = strings.TrimSpace(normalized.AssignedBy)
+	normalized.Comment = strings.TrimSpace(normalized.Comment)
 
 	return normalized, nil
 }
