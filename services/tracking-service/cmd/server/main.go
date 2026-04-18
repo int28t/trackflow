@@ -86,7 +86,9 @@ func main() {
 			logger.Printf("%s redis unavailable (%s): %v; continue without timeline cache", serviceName, redisAddr, err)
 		} else {
 			cacheTTL := getDurationEnv(timelineCacheTTLEnvKey, defaultTimelineCacheTTL)
-			trackingService.SetTimelineCache(rediscache.NewTimelineCache(redisClient), cacheTTL)
+			trackingService.
+				SetTimelineCache(rediscache.NewTimelineCache(redisClient), cacheTTL).
+				SetOrderCacheInvalidator(rediscache.NewOrderCacheInvalidator(redisClient))
 			logger.Printf("%s timeline cache enabled: addr=%s ttl=%s", serviceName, redisAddr, cacheTTL)
 		}
 	}

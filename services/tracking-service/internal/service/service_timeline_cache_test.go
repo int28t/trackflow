@@ -84,6 +84,18 @@ func (c *timelineCacheStub) DeleteTimeline(_ context.Context, orderID string) er
 	return c.deleteErr
 }
 
+type orderCacheInvalidatorStub struct {
+	deleteCalls   int
+	deleteOrderID string
+	deleteErr     error
+}
+
+func (c *orderCacheInvalidatorStub) DeleteOrder(_ context.Context, orderID string) error {
+	c.deleteCalls++
+	c.deleteOrderID = orderID
+	return c.deleteErr
+}
+
 func TestGetOrderTimelineReturnsCacheHit(t *testing.T) {
 	t.Parallel()
 
@@ -180,7 +192,7 @@ func TestGetOrderTimelineFallsBackWhenCacheReadFails(t *testing.T) {
 	}
 }
 
-func TestUpdateOrderStatusInvalidatesTimelineCache(t *testing.T) {
+func TestUpdateOrderStatusInvalidatesTimelineAndOrderCaches(t *testing.T) {
 	t.Parallel()
 
 	repo := &timelineRepositoryStub{
@@ -191,9 +203,12 @@ func TestUpdateOrderStatusInvalidatesTimelineCache(t *testing.T) {
 			Source:  "manager",
 		},
 	}
-	cache := &timelineCacheStub{}
+	timelineCache := &timelineCacheStub{}
+	orderCache := &orderCacheInvalidatorStub{}
 
-	svc := New(repo).SetTimelineCache(cache, 15*time.Second)
+	svc := New(repo).
+		SetTimelineCache(timelineCache, 15*time.Second).
+		SetOrderCacheInvalidator(orderCache)
 
 	_, err := svc.UpdateOrderStatus(context.Background(), "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", model.UpdateStatusInput{
 		Status: "assigned",
@@ -203,11 +218,19 @@ func TestUpdateOrderStatusInvalidatesTimelineCache(t *testing.T) {
 		t.Fatalf("UpdateOrderStatus returned error: %v", err)
 	}
 
-	if cache.deleteCalls != 1 {
-		t.Fatalf("expected cache delete calls 1, got %d", cache.deleteCalls)
+	if timelineCache.deleteCalls != 1 {
+		t.Fatalf("expected timeline cache delete calls 1, got %d", timelineCache.deleteCalls)
 	}
 
-	if cache.deleteOrderID != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
-		t.Fatalf("unexpected cache delete order_id: got %q", cache.deleteOrderID)
+	if timelineCache.deleteOrderID != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
+		t.Fatalf("unexpected timeline cache delete order_id: got %q", timelineCache.deleteOrderID)
+	}
+
+	if orderCache.deleteCalls != 1 {
+		t.Fatalf("expected order cache delete calls 1, got %d", orderCache.deleteCalls)
+	}
+
+	if orderCache.deleteOrderID != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
+		t.Fatalf("unexpected order cache delete order_id: got %q", orderCache.deleteOrderID)
 	}
 }

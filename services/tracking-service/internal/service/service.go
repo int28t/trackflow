@@ -40,6 +40,10 @@ type TimelineCache interface {
 	DeleteTimeline(ctx context.Context, orderID string) error
 }
 
+type OrderCacheInvalidator interface {
+	DeleteOrder(ctx context.Context, orderID string) error
+}
+
 type noopNotifier struct{}
 
 func (noopNotifier) NotifyStatusChanged(_ context.Context, _ model.StatusHistoryItem) error {
@@ -51,6 +55,7 @@ type TrackingService struct {
 	notifier         Notifier
 	timelineCache    TimelineCache
 	timelineCacheTTL time.Duration
+	orderCache       OrderCacheInvalidator
 }
 
 func New(repo Repository) *TrackingService {
@@ -86,6 +91,15 @@ func (s *TrackingService) SetTimelineCache(cache TimelineCache, ttl time.Duratio
 	}
 
 	s.timelineCacheTTL = ttl
+	return s
+}
+
+func (s *TrackingService) SetOrderCacheInvalidator(invalidator OrderCacheInvalidator) *TrackingService {
+	if s == nil {
+		return nil
+	}
+
+	s.orderCache = invalidator
 	return s
 }
 
@@ -169,6 +183,7 @@ func (s *TrackingService) UpdateOrderStatus(ctx context.Context, orderID string,
 	}
 
 	s.invalidateTimeline(ctx, id)
+	s.invalidateOrderCache(ctx, id)
 
 	if s.notifier != nil {
 		if notifyErr := s.notifier.NotifyStatusChanged(ctx, historyItem); notifyErr != nil {
@@ -210,6 +225,17 @@ func (s *TrackingService) invalidateTimeline(ctx context.Context, orderID string
 	err := s.timelineCache.DeleteTimeline(ctx, orderID)
 	if err != nil {
 		log.Printf("timeline cache invalidate failed: order_id=%s err=%v", orderID, err)
+	}
+}
+
+func (s *TrackingService) invalidateOrderCache(ctx context.Context, orderID string) {
+	if s == nil || s.orderCache == nil {
+		return
+	}
+
+	err := s.orderCache.DeleteOrder(ctx, orderID)
+	if err != nil {
+		log.Printf("order cache invalidate failed: order_id=%s err=%v", orderID, err)
 	}
 }
 
