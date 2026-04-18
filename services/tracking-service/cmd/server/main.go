@@ -10,8 +10,11 @@ import (
 	"strings"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
+
 	_ "github.com/jackc/pgx/v5/stdlib"
 
+	rediscache "trackflow/services/tracking-service/internal/cache/redis"
 	"trackflow/services/tracking-service/internal/handler"
 	"trackflow/services/tracking-service/internal/notification"
 	"trackflow/services/tracking-service/internal/repository/postgres"
@@ -26,9 +29,13 @@ const (
 	notificationRequestTimeoutEnvKey    = "NOTIFICATION_REQUEST_TIMEOUT"
 	notificationEmailRecipientEnvKey    = "NOTIFICATION_EMAIL_RECIPIENT"
 	notificationTelegramRecipientEnvKey = "NOTIFICATION_TELEGRAM_RECIPIENT"
+	redisAddrEnvKey                     = "REDIS_ADDR"
+	timelineCacheTTLEnvKey              = "TRACKING_TIMELINE_CACHE_TTL"
 	defaultPort                         = "8083"
 	defaultNotificationServiceURL       = "http://notification-service:8085"
 	defaultNotificationRequestTimeout   = 3 * time.Second
+	defaultRedisAddr                    = "redis:6379"
+	defaultTimelineCacheTTL             = 15 * time.Second
 	dialTimeout                         = 5 * time.Second
 )
 
@@ -66,6 +73,24 @@ func main() {
 
 	repository := postgres.New(db)
 	trackingService := service.New(repository).SetNotifier(notificationClient)
+
+	redisAddr := strings.TrimSpace(getEnv(redisAddrEnvKey, defaultRedisAddr))
+	if redisAddr != "" {
+		redisClient := goredis.NewClient(&goredis.Options{Addr: redisAddr})
+		defer redisClient.Close()
+
+		redisCtx, redisCancel := context.WithTimeout(context.Background(), dialTimeout)
+		defer redisCancel()
+
+		if err := redisClient.Ping(redisCtx).Err(); err != nil {
+			logger.Printf("%s redis unavailable (%s): %v; continue without timeline cache", serviceName, redisAddr, err)
+		} else {
+			cacheTTL := getDurationEnv(timelineCacheTTLEnvKey, defaultTimelineCacheTTL)
+			trackingService.SetTimelineCache(rediscache.NewTimelineCache(redisClient), cacheTTL)
+			logger.Printf("%s timeline cache enabled: addr=%s ttl=%s", serviceName, redisAddr, cacheTTL)
+		}
+	}
+
 	router := handler.New(logger, trackingService)
 
 	port := getEnv(portEnvKey, defaultPort)

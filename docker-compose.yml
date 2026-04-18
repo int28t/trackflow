@@ -88,6 +88,7 @@ services:
       NOTIFICATION_EMAIL_RECIPIENT: ${NOTIFICATION_EMAIL_RECIPIENT:-user@example.com}
       NOTIFICATION_TELEGRAM_RECIPIENT: ${NOTIFICATION_TELEGRAM_RECIPIENT:-@trackflow_user}
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      TRACKING_TIMELINE_CACHE_TTL: ${TRACKING_TIMELINE_CACHE_TTL:-15s}
     depends_on:
       postgres:
         condition: service_healthy

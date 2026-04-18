@@ -7,13 +7,15 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"time"
 
 	"trackflow/services/tracking-service/internal/model"
 )
 
 const (
-	defaultTimelineLimit = 50
-	maxTimelineLimit     = 200
+	defaultTimelineLimit    = 50
+	maxTimelineLimit        = 200
+	defaultTimelineCacheTTL = 15 * time.Second
 )
 
 var (
@@ -32,6 +34,12 @@ type Notifier interface {
 	NotifyStatusChanged(ctx context.Context, item model.StatusHistoryItem) error
 }
 
+type TimelineCache interface {
+	GetTimeline(ctx context.Context, orderID string) ([]model.StatusHistoryItem, bool, error)
+	SetTimeline(ctx context.Context, orderID string, items []model.StatusHistoryItem, ttl time.Duration) error
+	DeleteTimeline(ctx context.Context, orderID string) error
+}
+
 type noopNotifier struct{}
 
 func (noopNotifier) NotifyStatusChanged(_ context.Context, _ model.StatusHistoryItem) error {
@@ -39,14 +47,17 @@ func (noopNotifier) NotifyStatusChanged(_ context.Context, _ model.StatusHistory
 }
 
 type TrackingService struct {
-	repo     Repository
-	notifier Notifier
+	repo             Repository
+	notifier         Notifier
+	timelineCache    TimelineCache
+	timelineCacheTTL time.Duration
 }
 
 func New(repo Repository) *TrackingService {
 	return &TrackingService{
-		repo:     repo,
-		notifier: noopNotifier{},
+		repo:             repo,
+		notifier:         noopNotifier{},
+		timelineCacheTTL: defaultTimelineCacheTTL,
 	}
 }
 
@@ -61,6 +72,20 @@ func (s *TrackingService) SetNotifier(notifier Notifier) *TrackingService {
 	}
 
 	s.notifier = notifier
+	return s
+}
+
+func (s *TrackingService) SetTimelineCache(cache TimelineCache, ttl time.Duration) *TrackingService {
+	if s == nil {
+		return nil
+	}
+
+	s.timelineCache = cache
+	if ttl <= 0 {
+		ttl = defaultTimelineCacheTTL
+	}
+
+	s.timelineCacheTTL = ttl
 	return s
 }
 
@@ -86,7 +111,25 @@ func (s *TrackingService) GetOrderTimeline(ctx context.Context, orderID string, 
 		return nil, validationError("order_id must be a valid UUID")
 	}
 
-	return s.repo.GetOrderTimeline(ctx, id, normalizeLimit(limit))
+	normalizedLimit := normalizeLimit(limit)
+
+	if s.timelineCache != nil {
+		cachedItems, found, err := s.timelineCache.GetTimeline(ctx, id)
+		if err != nil {
+			log.Printf("timeline cache read failed: order_id=%s err=%v", id, err)
+		} else if found {
+			return sliceTimeline(cachedItems, normalizedLimit), nil
+		}
+	}
+
+	items, err := s.repo.GetOrderTimeline(ctx, id, maxTimelineLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	s.cacheTimeline(ctx, id, items)
+
+	return sliceTimeline(items, normalizedLimit), nil
 }
 
 func (s *TrackingService) UpdateOrderStatus(ctx context.Context, orderID string, input model.UpdateStatusInput) (model.StatusHistoryItem, error) {
@@ -125,6 +168,8 @@ func (s *TrackingService) UpdateOrderStatus(ctx context.Context, orderID string,
 		return model.StatusHistoryItem{}, err
 	}
 
+	s.invalidateTimeline(ctx, id)
+
 	if s.notifier != nil {
 		if notifyErr := s.notifier.NotifyStatusChanged(ctx, historyItem); notifyErr != nil {
 			log.Printf("notification dispatch failed: order_id=%s status=%s err=%v", historyItem.OrderID, historyItem.Status, notifyErr)
@@ -144,6 +189,36 @@ func normalizeLimit(limit int) int {
 	}
 
 	return limit
+}
+
+func (s *TrackingService) cacheTimeline(ctx context.Context, orderID string, items []model.StatusHistoryItem) {
+	if s == nil || s.timelineCache == nil {
+		return
+	}
+
+	err := s.timelineCache.SetTimeline(ctx, orderID, items, s.timelineCacheTTL)
+	if err != nil {
+		log.Printf("timeline cache write failed: order_id=%s err=%v", orderID, err)
+	}
+}
+
+func (s *TrackingService) invalidateTimeline(ctx context.Context, orderID string) {
+	if s == nil || s.timelineCache == nil {
+		return
+	}
+
+	err := s.timelineCache.DeleteTimeline(ctx, orderID)
+	if err != nil {
+		log.Printf("timeline cache invalidate failed: order_id=%s err=%v", orderID, err)
+	}
+}
+
+func sliceTimeline(items []model.StatusHistoryItem, limit int) []model.StatusHistoryItem {
+	if limit <= 0 || len(items) <= limit {
+		return items
+	}
+
+	return items[:limit]
 }
 
 func validationError(message string) error {
