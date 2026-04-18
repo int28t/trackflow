@@ -5,19 +5,21 @@ import (
 	"log"
 	"time"
 
+	"trackflow/services/carrier-sync-service/internal/client"
 	"trackflow/services/carrier-sync-service/internal/service"
 )
 
 const defaultWorkerInterval = 30 * time.Second
 
 type Worker struct {
-	logger    *log.Logger
-	svc       *service.SyncService
-	interval  time.Duration
-	batchSize int
+	logger         *log.Logger
+	svc            *service.SyncService
+	trackingClient client.TrackingStatusClient
+	interval       time.Duration
+	batchSize      int
 }
 
-func New(logger *log.Logger, svc *service.SyncService, interval time.Duration, batchSize int) *Worker {
+func New(logger *log.Logger, svc *service.SyncService, trackingClient client.TrackingStatusClient, interval time.Duration, batchSize int) *Worker {
 	if logger == nil {
 		logger = log.Default()
 	}
@@ -31,10 +33,11 @@ func New(logger *log.Logger, svc *service.SyncService, interval time.Duration, b
 	}
 
 	return &Worker{
-		logger:    logger,
-		svc:       svc,
-		interval:  interval,
-		batchSize: batchSize,
+		logger:         logger,
+		svc:            svc,
+		trackingClient: trackingClient,
+		interval:       interval,
+		batchSize:      batchSize,
 	}
 }
 
@@ -45,6 +48,11 @@ func (w *Worker) Start(ctx context.Context) {
 
 	if w.svc == nil {
 		w.logger.Print("carrier sync worker disabled: sync service is not configured")
+		return
+	}
+
+	if w.trackingClient == nil {
+		w.logger.Print("carrier sync worker disabled: tracking client is not configured")
 		return
 	}
 
@@ -72,14 +80,24 @@ func (w *Worker) runOnce(ctx context.Context) {
 		return
 	}
 
+	synced := 0
+	failed := 0
+
 	for _, update := range updates {
-		w.logger.Printf(
-			"carrier update fetched: order_id=%s external_status=%s updated_at=%s",
-			update.OrderID,
-			update.ExternalStatus,
-			update.UpdatedAt.Format(time.RFC3339),
-		)
+		err := w.trackingClient.PushStatusUpdate(ctx, update)
+		if err != nil {
+			failed++
+			w.logger.Printf(
+				"carrier update sync failed: order_id=%s external_status=%s err=%v",
+				update.OrderID,
+				update.ExternalStatus,
+				err,
+			)
+			continue
+		}
+
+		synced++
 	}
 
-	w.logger.Printf("carrier sync cycle completed: fetched=%d", len(updates))
+	w.logger.Printf("carrier sync cycle completed: fetched=%d synced=%d failed=%d", len(updates), synced, failed)
 }

@@ -17,17 +17,20 @@ import (
 )
 
 const (
-	serviceName            = "carrier-sync-service"
-	portEnvKey             = "CARRIER_SYNC_SERVICE_PORT"
-	clientModeEnvKey       = "CARRIER_CLIENT_MODE"
-	carrierBaseURLEnvKey   = "CARRIER_API_BASE_URL"
-	carrierTokenEnvKey     = "CARRIER_API_TOKEN"
-	syncIntervalEnvKey     = "CARRIER_SYNC_INTERVAL"
-	defaultPort            = "8084"
-	defaultClientMode      = "mock"
-	defaultCarrierBaseURL  = "https://carrier.example/api"
-	defaultSyncInterval    = 30 * time.Second
-	defaultClientBatchSize = 5
+	serviceName               = "carrier-sync-service"
+	portEnvKey                = "CARRIER_SYNC_SERVICE_PORT"
+	clientModeEnvKey          = "CARRIER_CLIENT_MODE"
+	carrierBaseURLEnvKey      = "CARRIER_API_BASE_URL"
+	carrierTokenEnvKey        = "CARRIER_API_TOKEN"
+	trackingServiceURLEnvKey  = "TRACKING_SERVICE_URL"
+	syncIntervalEnvKey        = "CARRIER_SYNC_INTERVAL"
+	defaultPort               = "8084"
+	defaultClientMode         = "mock"
+	defaultCarrierBaseURL     = "https://carrier.example/api"
+	defaultTrackingServiceURL = "http://tracking-service:8083"
+	defaultSyncInterval       = 30 * time.Second
+	defaultClientBatchSize    = 5
+	trackingRequestTimeout    = 5 * time.Second
 )
 
 func main() {
@@ -38,8 +41,17 @@ func main() {
 		log.Fatalf("%s configuration error: %v", serviceName, err)
 	}
 
+	trackingClient, err := client.NewTrackingHTTPClient(
+		logger,
+		getEnv(trackingServiceURLEnvKey, defaultTrackingServiceURL),
+		trackingRequestTimeout,
+	)
+	if err != nil {
+		log.Fatalf("%s configuration error: %v", serviceName, err)
+	}
+
 	syncService := service.New(carrierClient)
-	syncWorker := worker.New(logger, syncService, getSyncInterval(logger), defaultClientBatchSize)
+	syncWorker := worker.New(logger, syncService, trackingClient, getSyncInterval(logger), defaultClientBatchSize)
 	router := handler.New(logger, syncService)
 
 	ctx, cancel := context.WithCancel(context.Background())

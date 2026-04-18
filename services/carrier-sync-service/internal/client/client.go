@@ -9,3 +9,7 @@ import (
 type CarrierClient interface {
 	FetchStatusUpdates(ctx context.Context, limit int) ([]model.StatusUpdate, error)
 }
+
+type TrackingStatusClient interface {
+	PushStatusUpdate(ctx context.Context, update model.StatusUpdate) error
+}
