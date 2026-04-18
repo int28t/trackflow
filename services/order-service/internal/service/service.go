@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
+	"time"
 
 	"trackflow/services/order-service/internal/model"
 )
@@ -14,6 +16,7 @@ const (
 	defaultListLimit    = 20
 	maxListLimit        = 100
 	defaultServiceLevel = "standard"
+	defaultCacheTTL     = time.Minute
 )
 
 var (
@@ -35,12 +38,36 @@ type Repository interface {
 	GetOrderByIdempotencyKey(ctx context.Context, idempotencyKey string) (model.Order, error)
 }
 
+type OrderCache interface {
+	GetOrderByID(ctx context.Context, orderID string) (model.Order, bool, error)
+	SetOrder(ctx context.Context, order model.Order, ttl time.Duration) error
+}
+
 type OrderService struct {
-	repo Repository
+	repo     Repository
+	cache    OrderCache
+	cacheTTL time.Duration
 }
 
 func New(repo Repository) *OrderService {
-	return &OrderService{repo: repo}
+	return &OrderService{
+		repo:     repo,
+		cacheTTL: defaultCacheTTL,
+	}
+}
+
+func (s *OrderService) SetCache(cache OrderCache, ttl time.Duration) *OrderService {
+	if s == nil {
+		return nil
+	}
+
+	s.cache = cache
+	if ttl <= 0 {
+		ttl = defaultCacheTTL
+	}
+
+	s.cacheTTL = ttl
+	return s
 }
 
 func (s *OrderService) Health(ctx context.Context) error {
@@ -73,7 +100,23 @@ func (s *OrderService) GetOrderByID(ctx context.Context, orderID string) (model.
 		return model.Order{}, validationError("order_id must be a valid UUID")
 	}
 
-	return s.repo.GetOrderByID(ctx, id)
+	if s.cache != nil {
+		cachedOrder, found, err := s.cache.GetOrderByID(ctx, id)
+		if err != nil {
+			log.Printf("order cache read failed: order_id=%s err=%v", id, err)
+		} else if found {
+			return cachedOrder, nil
+		}
+	}
+
+	order, err := s.repo.GetOrderByID(ctx, id)
+	if err != nil {
+		return model.Order{}, err
+	}
+
+	s.cacheOrder(ctx, order)
+
+	return order, nil
 }
 
 func (s *OrderService) AssignOrder(ctx context.Context, orderID string, input model.AssignOrderInput) (model.Order, error) {
@@ -95,7 +138,14 @@ func (s *OrderService) AssignOrder(ctx context.Context, orderID string, input mo
 		return model.Order{}, err
 	}
 
-	return s.repo.AssignOrder(ctx, id, normalizedInput)
+	order, err := s.repo.AssignOrder(ctx, id, normalizedInput)
+	if err != nil {
+		return model.Order{}, err
+	}
+
+	s.cacheOrder(ctx, order)
+
+	return order, nil
 }
 
 func (s *OrderService) CreateOrder(ctx context.Context, input model.CreateOrderInput, idempotencyKey string) (model.Order, bool, error) {
@@ -115,6 +165,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, input model.CreateOrderI
 
 	existing, err := s.repo.GetOrderByIdempotencyKey(ctx, key)
 	if err == nil {
+		s.cacheOrder(ctx, existing)
 		return existing, false, nil
 	}
 
@@ -124,6 +175,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, input model.CreateOrderI
 
 	createdOrder, err := s.repo.CreateOrder(ctx, normalizedInput, key)
 	if err == nil {
+		s.cacheOrder(ctx, createdOrder)
 		return createdOrder, true, nil
 	}
 
@@ -136,7 +188,20 @@ func (s *OrderService) CreateOrder(ctx context.Context, input model.CreateOrderI
 		return model.Order{}, false, lookupErr
 	}
 
+	s.cacheOrder(ctx, existing)
+
 	return existing, false, nil
+}
+
+func (s *OrderService) cacheOrder(ctx context.Context, order model.Order) {
+	if s == nil || s.cache == nil {
+		return
+	}
+
+	err := s.cache.SetOrder(ctx, order, s.cacheTTL)
+	if err != nil {
+		log.Printf("order cache write failed: order_id=%s err=%v", order.ID, err)
+	}
 }
 
 func normalizeLimit(limit int) int {
