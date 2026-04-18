@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"trackflow/services/carrier-sync-service/internal/mapping"
 	"trackflow/services/carrier-sync-service/internal/model"
 )
 
@@ -80,15 +81,21 @@ func (c *TrackingHTTPClient) PushStatusUpdate(ctx context.Context, update model.
 		return errors.New("external_status is required")
 	}
 
+	internalStatus, err := mapping.MapExternalStatus(status)
+	if err != nil {
+		return fmt.Errorf("map external status: %w", err)
+	}
+
 	payload := trackingStatusUpdateRequest{
-		Status: status,
+		Status: internalStatus,
 		Source: trackingStatusSource,
+		Metadata: map[string]any{
+			"carrier_external_status": status,
+		},
 	}
 
 	if !update.UpdatedAt.IsZero() {
-		payload.Metadata = map[string]any{
-			"carrier_updated_at": update.UpdatedAt.UTC().Format(time.RFC3339),
-		}
+		payload.Metadata["carrier_updated_at"] = update.UpdatedAt.UTC().Format(time.RFC3339)
 	}
 
 	body, err := json.Marshal(payload)
