@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -16,6 +18,7 @@ const (
 	defaultOrderServiceURL    = "http://order-service:8082"
 	defaultTrackingServiceURL = "http://tracking-service:8083"
 	upstreamRequestTimeout    = 10 * time.Second
+	maxUpstreamErrorBodySize  = 64 * 1024
 )
 
 type GatewayProxy struct {
@@ -103,11 +106,41 @@ func (p *GatewayProxy) forward(w http.ResponseWriter, r *http.Request, base *url
 	upstreamReq.Header = cloneHeader(r.Header)
 	upstreamReq.ContentLength = r.ContentLength
 
+	requestID := getRequestID(r.Context())
+	if requestID != "" {
+		upstreamReq.Header.Set(requestIDHeader, requestID)
+	}
+
 	upstreamResp, err := p.client.Do(upstreamReq)
 	if err != nil {
 		return NewHTTPError(http.StatusBadGateway, "upstream_unavailable", "upstream service is unavailable", err)
 	}
 	defer upstreamResp.Body.Close()
+
+	if upstreamResp.StatusCode >= http.StatusBadRequest {
+		code, message, rawBody, parseErr := parseUpstreamError(upstreamResp)
+		if parseErr != nil {
+			p.logger.Printf("failed to parse upstream error method=%s path=%s status=%d err=%v", r.Method, r.URL.Path, upstreamResp.StatusCode, parseErr)
+		}
+
+		if code == "" {
+			code = statusCodeToErrorCode(upstreamResp.StatusCode)
+		}
+
+		if message == "" {
+			message = strings.ToLower(http.StatusText(upstreamResp.StatusCode))
+			if message == "" {
+				message = "upstream service error"
+			}
+		}
+
+		wrappedErr := error(nil)
+		if rawBody != "" {
+			wrappedErr = fmt.Errorf("upstream response: %s", rawBody)
+		}
+
+		return NewHTTPError(upstreamResp.StatusCode, code, message, wrappedErr)
+	}
 
 	copyHeaders(w.Header(), upstreamResp.Header)
 	w.WriteHeader(upstreamResp.StatusCode)
@@ -118,6 +151,90 @@ func (p *GatewayProxy) forward(w http.ResponseWriter, r *http.Request, base *url
 	}
 
 	return nil
+}
+
+func parseUpstreamError(resp *http.Response) (string, string, string, error) {
+	if resp == nil || resp.Body == nil {
+		return "", "", "", nil
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrorBodySize))
+	if err != nil {
+		return "", "", "", err
+	}
+
+	raw := strings.TrimSpace(string(body))
+	if raw == "" {
+		return "", "", "", nil
+	}
+
+	type detailedError struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+
+	type envelope struct {
+		Code    string          `json:"code"`
+		Message string          `json:"message"`
+		Error   json.RawMessage `json:"error"`
+	}
+
+	var payload envelope
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", raw, raw, nil
+	}
+
+	code := strings.TrimSpace(payload.Code)
+	message := strings.TrimSpace(payload.Message)
+
+	if len(payload.Error) > 0 {
+		var textValue string
+		if err := json.Unmarshal(payload.Error, &textValue); err == nil {
+			if message == "" {
+				message = strings.TrimSpace(textValue)
+			}
+		} else {
+			var objectValue detailedError
+			if err := json.Unmarshal(payload.Error, &objectValue); err == nil {
+				if code == "" {
+					code = strings.TrimSpace(objectValue.Code)
+				}
+
+				if message == "" {
+					message = strings.TrimSpace(objectValue.Message)
+				}
+			}
+		}
+	}
+
+	return code, message, raw, nil
+}
+
+func statusCodeToErrorCode(status int) string {
+	switch status {
+	case http.StatusBadRequest:
+		return "bad_request"
+	case http.StatusUnauthorized:
+		return "unauthorized"
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusConflict:
+		return "conflict"
+	case http.StatusTooManyRequests:
+		return "too_many_requests"
+	case http.StatusInternalServerError:
+		return "internal_error"
+	case http.StatusBadGateway:
+		return "bad_gateway"
+	case http.StatusServiceUnavailable:
+		return "service_unavailable"
+	case http.StatusGatewayTimeout:
+		return "gateway_timeout"
+	default:
+		return "upstream_error"
+	}
 }
 
 func buildTargetURL(base *url.URL, requestPath, rawQuery string) *url.URL {
