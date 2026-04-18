@@ -1,6 +1,5 @@
 BEGIN;
 
--- Deterministic demo dataset for local environment.
 INSERT INTO addresses (id, city, street, house, apartment, lat, lng)
 VALUES
     ('a1111111-1111-1111-1111-111111111111', 'Saint Petersburg', 'Nevsky Prospekt', '10', NULL, 59.934300, 30.335100),
