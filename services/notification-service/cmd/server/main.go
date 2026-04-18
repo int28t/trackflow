@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"trackflow/services/notification-service/internal/handler"
 	"trackflow/services/notification-service/internal/sender"
@@ -18,8 +19,10 @@ const (
 	portEnvKey          = "NOTIFICATION_SERVICE_PORT"
 	providerEnvKey      = "NOTIFICATION_PROVIDER"
 	apiKeyEnvKey        = "NOTIFICATION_API_KEY"
+	dedupWindowEnvKey   = "NOTIFICATION_DEDUP_WINDOW"
 	defaultPort         = "8085"
 	defaultProviderMode = "mock"
+	defaultDedupWindow  = 24 * time.Hour
 )
 
 func main() {
@@ -33,7 +36,7 @@ func main() {
 		log.Fatalf("%s configuration error: %v", serviceName, err)
 	}
 
-	notificationService := service.New(messageSender)
+	notificationService := service.New(messageSender).SetDedupWindow(getDurationEnv(logger, dedupWindowEnvKey, defaultDedupWindow))
 	router := handler.New(logger, notificationService)
 
 	port := getEnv(portEnvKey, defaultPort)
@@ -63,6 +66,21 @@ func buildSender(logger *log.Logger, provider, apiKey string) (sender.Sender, er
 func getEnv(key, fallback string) string {
 	value := os.Getenv(key)
 	if value == "" {
+		return fallback
+	}
+
+	return value
+}
+
+func getDurationEnv(logger *log.Logger, key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		logger.Printf("invalid %s=%q, fallback to %s", key, raw, fallback)
 		return fallback
 	}
 
