@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 
@@ -27,12 +28,40 @@ type Repository interface {
 	UpdateOrderStatus(ctx context.Context, orderID, nextStatus, source, comment string, metadata []byte) (model.StatusHistoryItem, error)
 }
 
+type Notifier interface {
+	NotifyStatusChanged(ctx context.Context, item model.StatusHistoryItem) error
+}
+
+type noopNotifier struct{}
+
+func (noopNotifier) NotifyStatusChanged(_ context.Context, _ model.StatusHistoryItem) error {
+	return nil
+}
+
 type TrackingService struct {
-	repo Repository
+	repo     Repository
+	notifier Notifier
 }
 
 func New(repo Repository) *TrackingService {
-	return &TrackingService{repo: repo}
+	return &TrackingService{
+		repo:     repo,
+		notifier: noopNotifier{},
+	}
+}
+
+func (s *TrackingService) SetNotifier(notifier Notifier) *TrackingService {
+	if s == nil {
+		return nil
+	}
+
+	if notifier == nil {
+		s.notifier = noopNotifier{}
+		return s
+	}
+
+	s.notifier = notifier
+	return s
 }
 
 func (s *TrackingService) Health(ctx context.Context) error {
@@ -91,7 +120,18 @@ func (s *TrackingService) UpdateOrderStatus(ctx context.Context, orderID string,
 
 	comment := strings.TrimSpace(input.Comment)
 
-	return s.repo.UpdateOrderStatus(ctx, id, nextStatus, source, comment, input.Metadata)
+	historyItem, err := s.repo.UpdateOrderStatus(ctx, id, nextStatus, source, comment, input.Metadata)
+	if err != nil {
+		return model.StatusHistoryItem{}, err
+	}
+
+	if s.notifier != nil {
+		if notifyErr := s.notifier.NotifyStatusChanged(ctx, historyItem); notifyErr != nil {
+			log.Printf("notification dispatch failed: order_id=%s status=%s err=%v", historyItem.OrderID, historyItem.Status, notifyErr)
+		}
+	}
+
+	return historyItem, nil
 }
 
 func normalizeLimit(limit int) int {

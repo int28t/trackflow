@@ -141,7 +141,9 @@ func isValidationError(err error) bool {
 
 	message := err.Error()
 	return message == "order_id is required" ||
+		message == "status is required" ||
 		message == "channel is required" ||
+		message == "channel must be one of: email, telegram" ||
 		message == "recipient is required" ||
 		message == "message is required"
 }

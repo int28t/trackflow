@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -16,6 +17,11 @@ type Sender interface {
 type NotificationService struct {
 	sender Sender
 }
+
+const (
+	ChannelEmail    = "email"
+	ChannelTelegram = "telegram"
+)
 
 func New(sender Sender) *NotificationService {
 	return &NotificationService{sender: sender}
@@ -38,9 +44,19 @@ func (s *NotificationService) Send(ctx context.Context, event model.Event) error
 		return errors.New("order_id is required")
 	}
 
+	if strings.TrimSpace(event.Status) == "" {
+		return errors.New("status is required")
+	}
+
 	if strings.TrimSpace(event.Channel) == "" {
 		return errors.New("channel is required")
 	}
+
+	normalizedChannel, err := normalizeChannel(event.Channel)
+	if err != nil {
+		return err
+	}
+	event.Channel = normalizedChannel
 
 	if strings.TrimSpace(event.Recipient) == "" {
 		return errors.New("recipient is required")
@@ -55,4 +71,14 @@ func (s *NotificationService) Send(ctx context.Context, event model.Event) error
 	}
 
 	return s.sender.Send(ctx, event)
+}
+
+func normalizeChannel(channel string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(channel))
+	switch normalized {
+	case ChannelEmail, ChannelTelegram:
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("channel must be one of: %s, %s", ChannelEmail, ChannelTelegram)
+	}
 }

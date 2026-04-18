@@ -82,6 +82,10 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       TRACKING_SERVICE_PORT: ${TRACKING_SERVICE_PORT:-8083}
       POSTGRES_DSN: ${POSTGRES_DSN:-postgres://trackflow:trackflow@postgres:5432/trackflow?sslmode=disable}
+      NOTIFICATION_SERVICE_URL: ${NOTIFICATION_SERVICE_URL:-http://notification-service:8085}
+      NOTIFICATION_REQUEST_TIMEOUT: ${NOTIFICATION_REQUEST_TIMEOUT:-3s}
+      NOTIFICATION_EMAIL_RECIPIENT: ${NOTIFICATION_EMAIL_RECIPIENT:-user@example.com}
+      NOTIFICATION_TELEGRAM_RECIPIENT: ${NOTIFICATION_TELEGRAM_RECIPIENT:-@trackflow_user}
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
     depends_on:
       postgres:

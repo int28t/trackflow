@@ -7,24 +7,34 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"trackflow/services/tracking-service/internal/handler"
+	"trackflow/services/tracking-service/internal/notification"
 	"trackflow/services/tracking-service/internal/repository/postgres"
 	"trackflow/services/tracking-service/internal/service"
 )
 
 const (
-	serviceName = "tracking-service"
-	portEnvKey  = "TRACKING_SERVICE_PORT"
-	dsnEnvKey   = "POSTGRES_DSN"
-	defaultPort = "8083"
-	dialTimeout = 5 * time.Second
+	serviceName                         = "tracking-service"
+	portEnvKey                          = "TRACKING_SERVICE_PORT"
+	dsnEnvKey                           = "POSTGRES_DSN"
+	notificationServiceURLEnvKey        = "NOTIFICATION_SERVICE_URL"
+	notificationRequestTimeoutEnvKey    = "NOTIFICATION_REQUEST_TIMEOUT"
+	notificationEmailRecipientEnvKey    = "NOTIFICATION_EMAIL_RECIPIENT"
+	notificationTelegramRecipientEnvKey = "NOTIFICATION_TELEGRAM_RECIPIENT"
+	defaultPort                         = "8083"
+	defaultNotificationServiceURL       = "http://notification-service:8085"
+	defaultNotificationRequestTimeout   = 3 * time.Second
+	dialTimeout                         = 5 * time.Second
 )
 
 func main() {
+	logger := log.Default()
+
 	dsn := os.Getenv(dsnEnvKey)
 	if dsn == "" {
 		log.Fatalf("%s is required", dsnEnvKey)
@@ -43,9 +53,20 @@ func main() {
 		log.Fatalf("%s failed to connect to db: %v", serviceName, err)
 	}
 
+	notificationClient, err := notification.NewHTTPClient(
+		logger,
+		getEnv(notificationServiceURLEnvKey, defaultNotificationServiceURL),
+		getDurationEnv(notificationRequestTimeoutEnvKey, defaultNotificationRequestTimeout),
+		getEnv(notificationEmailRecipientEnvKey, ""),
+		getEnv(notificationTelegramRecipientEnvKey, ""),
+	)
+	if err != nil {
+		log.Fatalf("%s notification configuration error: %v", serviceName, err)
+	}
+
 	repository := postgres.New(db)
-	trackingService := service.New(repository)
-	router := handler.New(log.Default(), trackingService)
+	trackingService := service.New(repository).SetNotifier(notificationClient)
+	router := handler.New(logger, trackingService)
 
 	port := getEnv(portEnvKey, defaultPort)
 	addr := ":" + port
@@ -65,6 +86,21 @@ func main() {
 func getEnv(key, fallback string) string {
 	value := os.Getenv(key)
 	if value == "" {
+		return fallback
+	}
+
+	return value
+}
+
+func getDurationEnv(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		log.Printf("invalid %s=%q, fallback to %s", key, raw, fallback)
 		return fallback
 	}
 
