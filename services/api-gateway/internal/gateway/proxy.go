@@ -56,12 +56,28 @@ func (p *GatewayProxy) ordersCollection(w http.ResponseWriter, r *http.Request) 
 		return MethodNotAllowed(r.Method)
 	}
 
+	if r.Method == http.MethodGet {
+		if err := validateLimit(r.URL.Query().Get("limit"), maxOrdersListLimit); err != nil {
+			return err
+		}
+	}
+
+	if r.Method == http.MethodPost {
+		if err := validateCreateOrderRequest(r); err != nil {
+			return err
+		}
+	}
+
 	return p.forward(w, r, p.orderBase)
 }
 
 func (p *GatewayProxy) orderByID(w http.ResponseWriter, r *http.Request) error {
 	if r.Method != http.MethodGet {
 		return MethodNotAllowed(r.Method)
+	}
+
+	if err := validateOrderID(r.PathValue("id")); err != nil {
+		return err
 	}
 
 	return p.forward(w, r, p.orderBase)
@@ -72,6 +88,14 @@ func (p *GatewayProxy) assignOrder(w http.ResponseWriter, r *http.Request) error
 		return MethodNotAllowed(r.Method)
 	}
 
+	if err := validateOrderID(r.PathValue("id")); err != nil {
+		return err
+	}
+
+	if err := validateAssignOrderRequest(r); err != nil {
+		return err
+	}
+
 	return p.forward(w, r, p.orderBase)
 }
 
@@ -80,12 +104,28 @@ func (p *GatewayProxy) updateOrderStatus(w http.ResponseWriter, r *http.Request)
 		return MethodNotAllowed(r.Method)
 	}
 
+	if err := validateOrderID(r.PathValue("id")); err != nil {
+		return err
+	}
+
+	if err := validateUpdateStatusRequest(r); err != nil {
+		return err
+	}
+
 	return p.forward(w, r, p.trackingBase)
 }
 
 func (p *GatewayProxy) getOrderTimeline(w http.ResponseWriter, r *http.Request) error {
 	if r.Method != http.MethodGet {
 		return MethodNotAllowed(r.Method)
+	}
+
+	if err := validateOrderID(r.PathValue("id")); err != nil {
+		return err
+	}
+
+	if err := validateLimit(r.URL.Query().Get("limit"), maxTimelineListLimit); err != nil {
+		return err
 	}
 
 	return p.forward(w, r, p.trackingBase)
@@ -121,6 +161,10 @@ func (p *GatewayProxy) forward(w http.ResponseWriter, r *http.Request, base *url
 		code, message, rawBody, parseErr := parseUpstreamError(upstreamResp)
 		if parseErr != nil {
 			p.logger.Printf("failed to parse upstream error method=%s path=%s status=%d err=%v", r.Method, r.URL.Path, upstreamResp.StatusCode, parseErr)
+		}
+
+		if code == "" {
+			code = inferBusinessErrorCode(upstreamResp.StatusCode, message)
 		}
 
 		if code == "" {
@@ -235,6 +279,32 @@ func statusCodeToErrorCode(status int) string {
 	default:
 		return "upstream_error"
 	}
+}
+
+func inferBusinessErrorCode(status int, message string) string {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "" {
+		return ""
+	}
+
+	businessCodes := map[string]string{
+		"order not found":        "order_not_found",
+		"courier not found":      "courier_not_found",
+		"order already assigned": "order_already_assigned",
+		"assignment is not allowed for current order status": "assignment_not_allowed",
+		"status transition is not allowed":                   "status_transition_not_allowed",
+		"idempotency-key header is required":                 "idempotency_key_required",
+	}
+
+	if code, ok := businessCodes[normalized]; ok {
+		return code
+	}
+
+	if status == http.StatusBadRequest {
+		return "validation_error"
+	}
+
+	return ""
 }
 
 func buildTargetURL(base *url.URL, requestPath, rawQuery string) *url.URL {
