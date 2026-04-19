@@ -7,4 +7,5 @@
 bin/
 dist/
 coverage/
+coverage.out
 *.log
