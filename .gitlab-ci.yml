@@ -129,6 +129,7 @@ compose-smoke:
     DOCKER_TLS_CERTDIR: ""
     SMOKE_TIMEOUT_SECONDS: "180"
   before_script:
+    - apk add --no-cache bash curl
     - docker version
     - docker compose version
     - chmod +x scripts/smoke-local-stack.sh
