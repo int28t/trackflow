@@ -2,6 +2,7 @@ stages:
   - build
   - test
   - coverage
+  - smoke
 
 workflow:
   rules:
@@ -116,3 +117,22 @@ coverage:
       coverage_report:
         coverage_format: cobertura
         path: coverage/cobertura.xml
+
+compose-smoke:
+  stage: smoke
+  image: docker:27.1.1
+  services:
+    - name: docker:27.1.1-dind
+      command: ["--tls=false"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    SMOKE_TIMEOUT_SECONDS: "180"
+  before_script:
+    - docker version
+    - docker compose version
+    - chmod +x scripts/smoke-local-stack.sh
+  script:
+    - ./scripts/smoke-local-stack.sh --down
+  after_script:
+    - docker compose -f docker-compose.yml down -v || true
