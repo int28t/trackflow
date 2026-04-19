@@ -106,7 +106,7 @@ coverage:
 
       go install github.com/boumenot/gocover-cobertura@latest
       "$(go env GOPATH)/bin/gocover-cobertura" < coverage/all.out > coverage/cobertura.xml
-  coverage: '/TOTAL_COVERAGE:\s+([0-9]+(\.[0-9]+)?)%/'
+  coverage: '/TOTAL_COVERAGE:\s+([0-9]+(?:\.[0-9]+)?)%/'
   artifacts:
     when: always
     expire_in: 1 week
