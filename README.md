@@ -1,32 +1,32 @@
 # TrackFlow
 
-TrackFlow - микросервисный проект для логистического трекинга.
+TrackFlow - учебный микросервисный проект по логистическому трекингу заказов.
 
-Внешний трафик проходит через Nginx, после чего API Gateway маршрутизирует запросы во внутренние сервисы.
+Идея простая: через единый публичный API можно создать заказ, назначить курьера, вести статусы доставки и смотреть таймлайн событий.
 
-## Структура сервисов
+## Состав сервисов
 
-| Сервис | Назначение | Внутренний порт |
+| Сервис | Роль | Внутренний порт |
 |---|---|---|
-| nginx | Единая внешняя точка входа, reverse proxy на gateway | 80 |
-| api-gateway | Публичный REST API, валидация, маршрутизация, единый формат ошибок | 8081 |
-| order-service | Создание заказов, список заказов, назначение курьера, чтение заказа | 8082 |
-| tracking-service | Обновление статусов и чтение таймлайна заказа | 8083 |
-| carrier-sync-service | Синхронизация статусов от перевозчика и отправка в tracking-service | 8084 |
-| notification-service | Отправка уведомлений (по умолчанию mock provider) | 8085 |
-| postgres | Основное SQL-хранилище | 5432 |
+| nginx | Единая точка входа в систему | 80 |
+| api-gateway | Публичные endpoint, валидация и маршрутизация | 8081 |
+| order-service | Создание/чтение заказа, назначение курьера | 8082 |
+| tracking-service | История и обновления статусов | 8083 |
+| carrier-sync-service | Пуллинг статусов перевозчика и отправка в tracking | 8084 |
+| notification-service | Отправка уведомлений (в проекте используется mock sender) | 8085 |
+| postgres | Основная БД | 5432 |
 | redis | Кэш | 6379 |
 
-Снаружи Docker проброшен только Nginx (host-порт по умолчанию: 8080).
+## Быстрый запуск
 
-## Требования
+Требования:
 
 - Docker + Docker Compose
-- Go 1.25.x (для локальных команд вне контейнеров)
+- Go 1.25.x (если запускать команды локально, не в контейнере)
 
-## Быстрый запуск (Docker Compose)
+Шаги:
 
-1. Создать файл окружения:
+1. Подготовить окружение:
 
 ```bash
 cp .env.example .env
@@ -44,19 +44,19 @@ docker compose up -d --build
 docker compose exec -T postgres psql -U trackflow -d trackflow < migrations/postgres/000001_schema_v1.up.sql
 ```
 
-4. Опционально загрузить demo seed (курьеры, заказы, история статусов):
+4. (Опционально) загрузить демо-данные:
 
 ```bash
 docker compose exec -T postgres psql -U trackflow -d trackflow < migrations/postgres/000002_seed_demo_v1.up.sql
 ```
 
-5. Выполнить smoke-проверку локального стека:
+5. Запустить smoke локального стека:
 
 ```bash
 ./scripts/smoke-local-stack.sh --skip-build
 ```
 
-6. Проверить health endpoint:
+6. Проверить health:
 
 ```bash
 curl -fsS http://127.0.0.1:8080/health
@@ -68,9 +68,9 @@ curl -fsS http://127.0.0.1:8080/health
 docker compose down
 ```
 
-## Основные команды
+## Команды разработки
 
-### Короткие команды через Makefile
+Через Makefile:
 
 ```bash
 make help
@@ -80,7 +80,7 @@ make test
 make lint
 ```
 
-### Цикл тестов по сервисам
+Прогон тестов по всем сервисам:
 
 ```bash
 for svc in api-gateway order-service tracking-service carrier-sync-service notification-service; do
@@ -88,7 +88,7 @@ for svc in api-gateway order-service tracking-service carrier-sync-service notif
 done
 ```
 
-### Цикл покрытия по сервисам
+Прогон покрытия:
 
 ```bash
 for svc in api-gateway order-service tracking-service carrier-sync-service notification-service; do
@@ -96,9 +96,9 @@ for svc in api-gateway order-service tracking-service carrier-sync-service notif
 done
 ```
 
-## Smoke и E2E
+## Smoke и e2e
 
-### Health smoke для локального стека
+Smoke для локального стека:
 
 ```bash
 ./scripts/smoke-local-stack.sh
@@ -106,103 +106,63 @@ done
 
 Полезные флаги:
 
-- `--skip-build` запуск без пересборки образов
-- `--down` остановка стека после завершения smoke
+- --skip-build
+- --down
 
-### E2E smoke happy-path через gateway
+E2E happy path через gateway:
 
 ```bash
 ./scripts/smoke-gateway-happy-path.sh
 ```
 
-Опциональные переменные окружения:
+Опциональные переменные:
 
-- `E2E_GATEWAY_BASE_URL` (по умолчанию `http://127.0.0.1:8080`)
-- `E2E_COURIER_ID` (по умолчанию seeded courier id)
+- E2E_GATEWAY_BASE_URL (по умолчанию http://127.0.0.1:8080)
+- E2E_COURIER_ID (по умолчанию seeded courier id)
 
-## API контракт
+## API и Swagger
 
-- Базовый публичный контракт: `docs/api/openapi-v1.yaml`
+OpenAPI контракт:
 
-### Swagger UI
+- docs/api/openapi-v1.yaml
 
-Быстрый запуск через Docker:
+Swagger UI через Docker:
 
 ```bash
 ./scripts/swagger-ui-local.sh
 ```
 
-После запуска открыть:
+URL после старта:
 
-```text
-http://127.0.0.1:8089
-```
+- http://127.0.0.1:8089
 
-Опциональные переменные:
+Параметры запуска:
 
-- `SWAGGER_UI_PORT` (по умолчанию `8089`)
-- `OPENAPI_FILE` (по умолчанию `docs/api/openapi-v1.yaml`)
+- SWAGGER_UI_PORT (default 8089)
+- OPENAPI_FILE (default docs/api/openapi-v1.yaml)
 
-Вариант без Docker (через локальный HTTP-сервер):
+Если Docker недоступен, можно поднять статику локально:
 
 ```bash
 python3 -m http.server 8090
 ```
 
-И затем открыть страницу:
+и открыть:
 
-```text
-http://127.0.0.1:8090/docs/api/swagger-ui/
-```
-
-Основные gateway маршруты:
-
-- `GET /health`
-- `GET /metrics`
-- `GET/POST /v1/orders`
-- `GET /v1/orders/{id}`
-- `POST /v1/orders/{id}/assign`
-- `POST /v1/orders/{id}/status`
-- `GET /v1/orders/{id}/timeline`
-
-## Структура репозитория
-
-```text
-trackflow/
-  services/
-    api-gateway/
-    order-service/
-    tracking-service/
-    carrier-sync-service/
-    notification-service/
-  migrations/
-    postgres/
-  deploy/
-    nginx/
-  scripts/
-    smoke-local-stack.sh
-    smoke-gateway-happy-path.sh
-    swagger-ui-local.sh
-  docs/
-    api/openapi-v1.yaml
-    api/swagger-ui/index.html
-  docker-compose.yml
-  .gitlab-ci.yml
-  Makefile
-```
+- http://127.0.0.1:8090/docs/api/swagger-ui/
 
 ## CI/CD
 
-GitLab CI pipeline включает:
+Pipeline в GitLab включает:
 
-- Стадию build для всех сервисов
-- Стадию test для всех сервисов
-- Стадию coverage с отчетами и coverage gate
-- Стадию compose-smoke с проверкой health-check
+- build;
+- test;
+- coverage + gate;
+- compose-smoke.
 
-Политика coverage gate:
+Coverage gate:
 
-- Для каждого микросервиса, кроме `api-gateway`, покрытие должно быть >= 30%
-- Если у любого non-gateway сервиса покрытие ниже порога, pipeline завершается ошибкой
+- для всех микросервисов, кроме api-gateway, порог не ниже 30%;
+- при падении ниже порога pipeline завершается ошибкой.
 
-Артефакты покрытия собираются в `coverage/`, включая Cobertura XML для GitLab UI.
+Артефакты покрытия сохраняются в папку coverage, включая Cobertura XML для UI GitLab.
