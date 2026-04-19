@@ -3,9 +3,9 @@ info:
   title: TrackFlow API Gateway Public API
   version: 1.0.0
   description: >-
-    Baseline public contract for API Gateway.
-    Current v1 implementation exposes the health endpoint.
-    Domain endpoints are added incrementally with backward compatibility.
+    Public contract for API Gateway v1.
+    Includes order management, assignment, status updates, timeline reads,
+    metrics endpoint, and unified error envelope returned by gateway.
 servers:
   - url: http://localhost:8080
     description: Local stack via Nginx
@@ -13,7 +13,11 @@ servers:
     description: Relative base URL
 tags:
   - name: System
-    description: Service health and operational endpoints
+    description: Health and operational endpoints
+  - name: Orders
+    description: Order creation, reads and assignment
+  - name: Tracking
+    description: Status updates and timeline
 paths:
   /health:
     get:
@@ -22,6 +26,9 @@ paths:
       summary: Gateway health check
       description: Returns status for liveness checks.
       operationId: getGatewayHealth
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
       responses:
         "200":
           description: Gateway is healthy
@@ -30,3 +37,928 @@ paths:
               schema:
                 type: string
                 example: ok
+        "405":
+          description: Method is not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                method_not_allowed:
+                  value:
+                    error:
+                      code: method_not_allowed
+                      message: method POST is not allowed
+                    request_id: req-6f2c5c7f
+
+  /metrics:
+    get:
+      tags:
+        - System
+      summary: Gateway metrics snapshot
+      description: Returns in-memory HTTP metrics snapshot in JSON format.
+      operationId: getGatewayMetrics
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      responses:
+        "200":
+          description: Metrics snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsSnapshot'
+              examples:
+                ok:
+                  value:
+                    uptime_seconds: 1432
+                    requests_total: 57
+                    avg_latency_ms: 6.91
+                    routes:
+                      - method: GET
+                        route: /health
+                        status: 200
+                        requests: 21
+                        avg_latency_ms: 0.19
+                        max_latency_ms: 0.44
+                      - method: POST
+                        route: /v1/orders/{id}/status
+                        status: 200
+                        requests: 8
+                        avg_latency_ms: 18.31
+                        max_latency_ms: 27.87
+
+  /v1/orders:
+    get:
+      tags:
+        - Orders
+      summary: List orders
+      operationId: listOrders
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/OrdersLimitQuery'
+      responses:
+        "200":
+          description: Orders list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderListResponse'
+              examples:
+                ok:
+                  value:
+                    items:
+                      - id: e1111111-1111-1111-1111-111111111111
+                        customer_id: d1111111-1111-1111-1111-111111111111
+                        status: created
+                        created_at: "2026-04-19T09:10:11Z"
+                        updated_at: "2026-04-19T09:10:11Z"
+                      - id: e2222222-2222-2222-2222-222222222222
+                        customer_id: d2222222-2222-2222-2222-222222222222
+                        status: assigned
+                        created_at: "2026-04-19T08:45:00Z"
+                        updated_at: "2026-04-19T08:50:01Z"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_limit:
+                  value:
+                    error:
+                      code: validation_error
+                      message: limit must be greater than zero
+                    request_id: req-b22a4de1
+        "500":
+          description: Internal or upstream error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                internal:
+                  value:
+                    error:
+                      code: internal_error
+                      message: internal server error
+                    request_id: req-cc981203
+
+    post:
+      tags:
+        - Orders
+      summary: Create order
+      operationId: createOrder
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+            examples:
+              volgograd_cultural_route:
+                value:
+                  customer_id: d1111111-1111-1111-1111-111111111111
+                  pickup_address:
+                    city: Volgograd
+                    street: Ulitsa Gagarina
+                    house: "14"
+                    apartment: "12"
+                    lat: 48.712788
+                    lng: 44.515595
+                  dropoff_address:
+                    city: Volgograd
+                    street: Ulitsa Marshala Chuikova
+                    house: "47"
+                    apartment: "4"
+                    lat: 48.717594
+                    lng: 44.534392
+                  weight_kg: 1.25
+                  distance_km: 2.2
+                  service_level: standard
+      responses:
+        "201":
+          description: Order created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateOrderResponse'
+              examples:
+                created:
+                  value:
+                    order_id: e3333333-3333-3333-3333-333333333333
+                    status: created
+        "200":
+          description: Idempotent replay, existing order returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateOrderResponse'
+              examples:
+                existing:
+                  value:
+                    order_id: e3333333-3333-3333-3333-333333333333
+                    status: created
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                idempotency_required:
+                  value:
+                    error:
+                      code: validation_error
+                      message: Idempotency-Key header is required
+                    request_id: req-6c0b41de
+                invalid_payload:
+                  value:
+                    error:
+                      code: validation_error
+                      message: customer_id must be a valid UUID
+                    request_id: req-9d157ca0
+        "500":
+          description: Internal or upstream error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                internal:
+                  value:
+                    error:
+                      code: internal_error
+                      message: internal server error
+                    request_id: req-ff45ef2b
+
+  /v1/orders/{id}:
+    get:
+      tags:
+        - Orders
+      summary: Get order by ID
+      operationId: getOrderById
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/OrderIdPath'
+      responses:
+        "200":
+          description: Order details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+              examples:
+                ok:
+                  value:
+                    id: e1111111-1111-1111-1111-111111111111
+                    customer_id: d1111111-1111-1111-1111-111111111111
+                    status: assigned
+                    created_at: "2026-04-19T09:10:11Z"
+                    updated_at: "2026-04-19T09:20:35Z"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_order_id:
+                  value:
+                    error:
+                      code: validation_error
+                      message: order_id must be a valid UUID
+                    request_id: req-4a95a9fe
+        "404":
+          description: Order not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                not_found:
+                  value:
+                    error:
+                      code: order_not_found
+                      message: order not found
+                    request_id: req-1af9ce5e
+        "500":
+          description: Internal or upstream error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/orders/{id}/assign:
+    post:
+      tags:
+        - Orders
+      summary: Assign courier to order
+      operationId: assignOrder
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/OrderIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignOrderRequest'
+            examples:
+              assign:
+                value:
+                  courier_id: c1111111-1111-1111-1111-111111111111
+                  assigned_by: manager
+                  comment: Assigned for same-day delivery
+      responses:
+        "200":
+          description: Courier assigned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssignOrderResponse'
+              examples:
+                assigned:
+                  value:
+                    order_id: e1111111-1111-1111-1111-111111111111
+                    status: assigned
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_courier_id:
+                  value:
+                    error:
+                      code: validation_error
+                      message: courier_id must be a valid UUID
+                    request_id: req-e13dcb1a
+        "404":
+          description: Order or courier not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                order_not_found:
+                  value:
+                    error:
+                      code: order_not_found
+                      message: order not found
+                    request_id: req-84c18bb1
+                courier_not_found:
+                  value:
+                    error:
+                      code: courier_not_found
+                      message: courier not found
+                    request_id: req-3da95d63
+        "409":
+          description: Assignment conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                already_assigned:
+                  value:
+                    error:
+                      code: order_already_assigned
+                      message: order already assigned
+                    request_id: req-05063f3b
+                assignment_not_allowed:
+                  value:
+                    error:
+                      code: assignment_not_allowed
+                      message: assignment is not allowed for current order status
+                    request_id: req-640ef3c4
+        "500":
+          description: Internal or upstream error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/orders/{id}/status:
+    post:
+      tags:
+        - Tracking
+      summary: Update order status
+      operationId: updateOrderStatus
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/OrderIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateOrderStatusRequest'
+            examples:
+              in_transit:
+                value:
+                  status: in_transit
+                  source: courier
+                  comment: Courier picked up the package
+                  metadata:
+                    eta_minutes: 35
+      responses:
+        "200":
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateOrderStatusResponse'
+              examples:
+                updated:
+                  value:
+                    order_id: e1111111-1111-1111-1111-111111111111
+                    status: in_transit
+                    source: courier
+                    created_at: "2026-04-19T10:03:44Z"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_status:
+                  value:
+                      error:
+                        code: validation_error
+                        message: "invalid input: invalid status: unknown_status"
+                      request_id: req-7f3d93ef
+        "404":
+          description: Order not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                not_found:
+                  value:
+                    error:
+                      code: order_not_found
+                      message: order not found
+                    request_id: req-49ea3ce8
+        "409":
+          description: Status transition conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                transition_not_allowed:
+                  value:
+                    error:
+                      code: status_transition_not_allowed
+                      message: status transition is not allowed
+                    request_id: req-c18d3535
+        "500":
+          description: Internal or upstream error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/orders/{id}/timeline:
+    get:
+      tags:
+        - Tracking
+      summary: Get order timeline
+      operationId: getOrderTimeline
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+        - $ref: '#/components/parameters/OrderIdPath'
+        - $ref: '#/components/parameters/TimelineLimitQuery'
+      responses:
+        "200":
+          description: Timeline items sorted by created_at ascending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TimelineResponse'
+              examples:
+                timeline:
+                  value:
+                    items:
+                      - id: f0000001-1111-1111-1111-111111111111
+                        order_id: e1111111-1111-1111-1111-111111111111
+                        status: created
+                        source: system
+                        comment: Order created
+                        metadata:
+                          channel: api
+                        created_at: "2026-04-19T09:10:11Z"
+                      - id: f0000002-1111-1111-1111-111111111111
+                        order_id: e1111111-1111-1111-1111-111111111111
+                        status: assigned
+                        source: manager
+                        comment: Assigned to courier
+                        metadata:
+                          courier_id: c1111111-1111-1111-1111-111111111111
+                        created_at: "2026-04-19T09:20:35Z"
+                      - id: f0000003-1111-1111-1111-111111111111
+                        order_id: e1111111-1111-1111-1111-111111111111
+                        status: in_transit
+                        source: courier
+                        metadata:
+                          eta_minutes: 35
+                        created_at: "2026-04-19T10:03:44Z"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_limit:
+                  value:
+                    error:
+                      code: validation_error
+                      message: limit is too large
+                    request_id: req-1e4bcacf
+        "404":
+          description: Order not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                not_found:
+                  value:
+                    error:
+                      code: order_not_found
+                      message: order not found
+                    request_id: req-1af9ce5e
+        "500":
+          description: Internal or upstream error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  parameters:
+    RequestIdHeader:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: Optional request identifier. If omitted, gateway generates one.
+      schema:
+        type: string
+    CorrelationIdHeader:
+      name: X-Correlation-ID
+      in: header
+      required: false
+      description: Optional correlation identifier used as fallback for request ID.
+      schema:
+        type: string
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Required idempotency key for creating orders.
+      schema:
+        type: string
+        maxLength: 128
+        example: order-creation-2026-04-19-0001
+    OrderIdPath:
+      name: id
+      in: path
+      required: true
+      description: Order UUID.
+      schema:
+        type: string
+        format: uuid
+        example: e1111111-1111-1111-1111-111111111111
+    OrdersLimitQuery:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of orders to return (1..100).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        example: 20
+    TimelineLimitQuery:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of timeline items to return (1..200).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        example: 50
+
+  schemas:
+    ErrorObject:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: validation_error
+        message:
+          type: string
+          example: order_id must be a valid UUID
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorObject'
+        request_id:
+          type: string
+          example: req-a13b5f0c
+
+    AddressInput:
+      type: object
+      required:
+        - city
+        - street
+        - house
+        - lat
+        - lng
+      properties:
+        city:
+          type: string
+          example: Volgograd
+        street:
+          type: string
+          example: Ulitsa Gagarina
+        house:
+          type: string
+          example: "14"
+        apartment:
+          type: string
+          example: "12"
+        lat:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          example: 48.712788
+        lng:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          example: 44.515595
+
+    CreateOrderRequest:
+      type: object
+      required:
+        - customer_id
+        - pickup_address
+        - dropoff_address
+        - weight_kg
+        - distance_km
+      properties:
+        customer_id:
+          type: string
+          format: uuid
+          example: d1111111-1111-1111-1111-111111111111
+        pickup_address:
+          $ref: '#/components/schemas/AddressInput'
+        dropoff_address:
+          $ref: '#/components/schemas/AddressInput'
+        weight_kg:
+          type: number
+          format: double
+          exclusiveMinimum: 0
+          example: 1.25
+        distance_km:
+          type: number
+          format: double
+          minimum: 0
+          example: 2.2
+        service_level:
+          type: string
+          enum:
+            - standard
+            - express
+          example: standard
+
+    CreateOrderResponse:
+      type: object
+      required:
+        - order_id
+        - status
+      properties:
+        order_id:
+          type: string
+          format: uuid
+          example: e3333333-3333-3333-3333-333333333333
+        status:
+          type: string
+          enum:
+            - created
+            - assigned
+            - in_transit
+            - delivered
+            - cancelled
+          example: created
+
+    Order:
+      type: object
+      required:
+        - id
+        - customer_id
+        - status
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: e1111111-1111-1111-1111-111111111111
+        customer_id:
+          type: string
+          format: uuid
+          example: d1111111-1111-1111-1111-111111111111
+        status:
+          type: string
+          enum:
+            - created
+            - assigned
+            - in_transit
+            - delivered
+            - cancelled
+          example: assigned
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-04-19T09:10:11Z"
+        updated_at:
+          type: string
+          format: date-time
+          example: "2026-04-19T09:20:35Z"
+
+    OrderListResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Order'
+
+    AssignOrderRequest:
+      type: object
+      required:
+        - courier_id
+      properties:
+        courier_id:
+          type: string
+          format: uuid
+          example: c1111111-1111-1111-1111-111111111111
+        assigned_by:
+          type: string
+          example: manager
+        comment:
+          type: string
+          example: Assigned for same-day delivery
+
+    AssignOrderResponse:
+      type: object
+      required:
+        - order_id
+        - status
+      properties:
+        order_id:
+          type: string
+          format: uuid
+          example: e1111111-1111-1111-1111-111111111111
+        status:
+          type: string
+          example: assigned
+
+    UpdateOrderStatusRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - created
+            - assigned
+            - in_transit
+            - delivered
+            - cancelled
+          example: in_transit
+        source:
+          type: string
+          enum:
+            - system
+            - courier
+            - manager
+            - carrier_sync
+          example: courier
+        comment:
+          type: string
+          example: Courier picked up the package
+        metadata:
+          type: object
+          additionalProperties: true
+          example:
+            eta_minutes: 35
+
+    UpdateOrderStatusResponse:
+      type: object
+      required:
+        - order_id
+        - status
+        - source
+        - created_at
+      properties:
+        order_id:
+          type: string
+          format: uuid
+          example: e1111111-1111-1111-1111-111111111111
+        status:
+          type: string
+          example: in_transit
+        source:
+          type: string
+          example: courier
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-04-19T10:03:44Z"
+
+    StatusHistoryItem:
+      type: object
+      required:
+        - id
+        - order_id
+        - status
+        - source
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: f0000001-1111-1111-1111-111111111111
+        order_id:
+          type: string
+          format: uuid
+          example: e1111111-1111-1111-1111-111111111111
+        status:
+          type: string
+          enum:
+            - created
+            - assigned
+            - in_transit
+            - delivered
+            - cancelled
+          example: assigned
+        source:
+          type: string
+          enum:
+            - system
+            - courier
+            - manager
+            - carrier_sync
+          example: manager
+        comment:
+          type: string
+          nullable: true
+          example: Assigned to courier
+        metadata:
+          type: object
+          nullable: true
+          additionalProperties: true
+          example:
+            courier_id: c1111111-1111-1111-1111-111111111111
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-04-19T09:20:35Z"
+
+    TimelineResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/StatusHistoryItem'
+
+    MetricsRoute:
+      type: object
+      required:
+        - method
+        - route
+        - status
+        - requests
+        - avg_latency_ms
+        - max_latency_ms
+      properties:
+        method:
+          type: string
+          example: GET
+        route:
+          type: string
+          example: /v1/orders/{id}
+        status:
+          type: integer
+          example: 200
+        requests:
+          type: integer
+          format: int64
+          example: 57
+        avg_latency_ms:
+          type: number
+          format: double
+          example: 6.91
+        max_latency_ms:
+          type: number
+          format: double
+          example: 27.87
+
+    MetricsSnapshot:
+      type: object
+      required:
+        - uptime_seconds
+        - requests_total
+        - avg_latency_ms
+        - routes
+      properties:
+        uptime_seconds:
+          type: integer
+          format: int64
+          example: 1432
+        requests_total:
+          type: integer
+          format: int64
+          example: 57
+        avg_latency_ms:
+          type: number
+          format: double
+          example: 6.91
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricsRoute'
