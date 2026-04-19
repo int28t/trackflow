@@ -1,0 +1,118 @@
+stages:
+  - build
+  - test
+  - coverage
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+
+variables:
+  GO_VERSION: "1.25"
+  GOCACHE: "$CI_PROJECT_DIR/.cache/go/build"
+  GOMODCACHE: "$CI_PROJECT_DIR/.cache/go/pkg/mod"
+  COVERAGE_THRESHOLD: "30"
+
+.default-go-job: &default_go_job
+  image: golang:${GO_VERSION}
+  cache:
+    key: "$CI_COMMIT_REF_SLUG-go"
+    policy: pull-push
+    paths:
+      - .cache/go/build
+      - .cache/go/pkg/mod
+  before_script:
+    - go version
+    - mkdir -p "$GOCACHE" "$GOMODCACHE" coverage
+    - |
+      set -euo pipefail
+      services="api-gateway order-service tracking-service carrier-sync-service notification-service"
+      for svc in $services; do
+        echo "== mod download $svc =="
+        (cd "services/$svc" && go mod download)
+      done
+
+build:
+  stage: build
+  <<: *default_go_job
+  script:
+    - |
+      set -euo pipefail
+      services="api-gateway order-service tracking-service carrier-sync-service notification-service"
+      for svc in $services; do
+        echo "== build $svc =="
+        go build "./services/$svc/cmd/server"
+      done
+
+test:
+  stage: test
+  <<: *default_go_job
+  script:
+    - |
+      set -euo pipefail
+      services="api-gateway order-service tracking-service carrier-sync-service notification-service"
+      for svc in $services; do
+        echo "== test $svc =="
+        go test "./services/$svc/..."
+      done
+
+coverage:
+  stage: coverage
+  <<: *default_go_job
+  script:
+    - |
+      set -euo pipefail
+      services="api-gateway order-service tracking-service carrier-sync-service notification-service"
+
+      rm -rf coverage
+      mkdir -p coverage
+      echo "mode: count" > coverage/all.out
+      : > coverage/summary.txt
+
+      for svc in $services; do
+        profile="coverage/${svc}.out"
+        func_report="coverage/${svc}.func.txt"
+
+        echo "== coverage $svc =="
+        go test "./services/$svc/..." -covermode=count -coverprofile="$profile"
+        go tool cover -func="$profile" | tee "$func_report"
+        tail -n +2 "$profile" >> coverage/all.out
+
+        percent=$(awk '/^total:/ { gsub("%", "", $3); print $3 }' "$func_report")
+        if [ -z "$percent" ]; then
+          echo "Cannot parse coverage percent for $svc"
+          exit 1
+        fi
+
+        printf "SERVICE_COVERAGE %s %.1f%%\n" "$svc" "$percent" | tee -a coverage/summary.txt
+
+        if [ "$svc" != "api-gateway" ]; then
+          if awk -v p="$percent" -v t="$COVERAGE_THRESHOLD" 'BEGIN { exit (p + 0 < t + 0) ? 0 : 1 }'; then
+            echo "Coverage gate failed for $svc: $percent% < $COVERAGE_THRESHOLD%"
+            exit 1
+          fi
+        fi
+      done
+
+      go tool cover -func=coverage/all.out | tee coverage/all.func.txt
+      total=$(awk '/^total:/ { gsub("%", "", $3); print $3 }' coverage/all.func.txt)
+      if [ -z "$total" ]; then
+        echo "Cannot parse total coverage"
+        exit 1
+      fi
+
+      printf "TOTAL_COVERAGE: %.1f%%\n" "$total" | tee -a coverage/summary.txt
+
+      go install github.com/boumenot/gocover-cobertura@latest
+      "$(go env GOPATH)/bin/gocover-cobertura" < coverage/all.out > coverage/cobertura.xml
+  coverage: '/TOTAL_COVERAGE:\s+([0-9]+(\.[0-9]+)?)%/'
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - coverage/
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/cobertura.xml
