@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"trackflow/services/carrier-sync-service/internal/model"
+	"trackflow/services/carrier-sync-service/internal/observability"
 	"trackflow/services/carrier-sync-service/internal/requestid"
 	"trackflow/services/carrier-sync-service/internal/service"
 )
@@ -44,12 +45,14 @@ func New(logger *log.Logger, svc *service.SyncService) http.Handler {
 		logger: logger,
 		svc:    svc,
 	}
+	metrics := observability.NewHTTPMetrics(logger)
 
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler())
 	mux.HandleFunc("/health", h.health)
 	mux.HandleFunc("/internal/sync/run", h.runSync)
 
-	return requestid.Middleware(mux)
+	return requestid.Middleware(metrics.Middleware(mux))
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {

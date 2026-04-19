@@ -8,9 +8,11 @@ import (
 func NewRouter(logger *log.Logger) http.Handler {
 	errorHandler := NewErrorHandler(logger)
 	proxy := NewGatewayProxy(logger)
+	httpMetrics := NewHTTPMetrics(logger)
 	mux := http.NewServeMux()
 
 	mux.Handle("/health", Adapt(healthHandler, errorHandler))
+	mux.Handle("/metrics", httpMetrics.Handler())
 	mux.Handle("/v1/orders", Adapt(proxy.ordersCollection, errorHandler))
 	mux.Handle("/v1/orders/{id}", Adapt(proxy.orderByID, errorHandler))
 	mux.Handle("/v1/orders/{id}/assign", Adapt(proxy.assignOrder, errorHandler))
@@ -20,7 +22,7 @@ func NewRouter(logger *log.Logger) http.Handler {
 	return Chain(
 		Recover(errorHandler),
 		RequestID(),
-		Logging(logger),
+		httpMetrics.Middleware(),
 	)(mux)
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"trackflow/services/notification-service/internal/model"
+	"trackflow/services/notification-service/internal/observability"
 	"trackflow/services/notification-service/internal/requestid"
 	"trackflow/services/notification-service/internal/service"
 )
@@ -42,12 +43,14 @@ func New(logger *log.Logger, svc *service.NotificationService) http.Handler {
 		logger: logger,
 		svc:    svc,
 	}
+	metrics := observability.NewHTTPMetrics(logger)
 
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler())
 	mux.HandleFunc("/health", h.health)
 	mux.HandleFunc("/internal/notifications/send", h.send)
 
-	return requestid.Middleware(mux)
+	return requestid.Middleware(metrics.Middleware(mux))
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {

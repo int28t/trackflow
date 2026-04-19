@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"trackflow/services/tracking-service/internal/model"
+	"trackflow/services/tracking-service/internal/observability"
 	"trackflow/services/tracking-service/internal/requestid"
 	"trackflow/services/tracking-service/internal/service"
 )
@@ -52,15 +53,17 @@ func New(logger *log.Logger, svc *service.TrackingService) http.Handler {
 		logger: logger,
 		svc:    svc,
 	}
+	metrics := observability.NewHTTPMetrics(logger)
 
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler())
 	mux.HandleFunc("/health", h.health)
 	mux.HandleFunc("/orders/{id}/timeline", h.getOrderTimeline)
 	mux.HandleFunc("/v1/orders/{order_id}/timeline", h.getOrderTimeline)
 	mux.HandleFunc("/orders/{id}/status", h.updateOrderStatus)
 	mux.HandleFunc("/v1/orders/{order_id}/status", h.updateOrderStatus)
 
-	return requestid.Middleware(mux)
+	return requestid.Middleware(metrics.Middleware(mux))
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {

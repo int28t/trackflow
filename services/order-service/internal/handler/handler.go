@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"trackflow/services/order-service/internal/model"
+	"trackflow/services/order-service/internal/observability"
 	"trackflow/services/order-service/internal/requestid"
 	"trackflow/services/order-service/internal/service"
 )
@@ -57,8 +58,10 @@ func New(logger *log.Logger, svc *service.OrderService) http.Handler {
 		logger: logger,
 		svc:    svc,
 	}
+	metrics := observability.NewHTTPMetrics(logger)
 
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler())
 	mux.HandleFunc("/health", h.health)
 	mux.HandleFunc("/orders", h.createOrder)
 	mux.HandleFunc("/orders/{id}", h.getOrderByID)
@@ -67,7 +70,7 @@ func New(logger *log.Logger, svc *service.OrderService) http.Handler {
 	mux.HandleFunc("/v1/orders/{id}", h.getOrderByID)
 	mux.HandleFunc("/v1/orders/{id}/assign", h.assignOrder)
 
-	return requestid.Middleware(mux)
+	return requestid.Middleware(metrics.Middleware(mux))
 }
 
 func (h *Handler) orders(w http.ResponseWriter, r *http.Request) {
