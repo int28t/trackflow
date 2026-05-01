@@ -1,5 +1,12 @@
 # TrackFlow
 
+![CI](https://github.com/int28t/trackflow/actions/workflows/ci.yml/badge.svg?branch=main)
+
+![Release](https://img.shields.io/github/v/tag/int28t/trackflow?style=for-the-badge)
+![Go](https://img.shields.io/badge/Go-1.25-00ADD8?style=for-the-badge&logo=go&logoColor=white)
+![Coverage](https://img.shields.io/badge/test%20coverage-45%25-yellow?style=for-the-badge)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+
 TrackFlow - учебный микросервисный проект по логистическому трекингу заказов.
 
 Идея простая: через единый публичный API можно создать заказ, назначить курьера, вести статусы доставки и смотреть таймлайн событий.
