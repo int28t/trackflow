@@ -1,0 +1,210 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+env:
+  GO_VERSION: "1.25"
+  GOCACHE: ${{ github.workspace }}/.cache/go/build
+  GOMODCACHE: ${{ github.workspace }}/.cache/go/pkg/mod
+  COVERAGE_THRESHOLD: "30"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: golang:1.25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .cache/go/build
+            .cache/go/pkg/mod
+          key: ${{ runner.os }}-${{ github.ref_name }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ github.ref_name }}-go-
+            ${{ runner.os }}-go-
+
+      - name: Go version
+        run: go version
+
+      - name: Prepare cache dirs
+        run: mkdir -p "$GOCACHE" "$GOMODCACHE" coverage
+
+      - name: Download modules
+        run: |
+          set -euo pipefail
+          services="api-gateway order-service tracking-service carrier-sync-service notification-service"
+          for svc in $services; do
+            echo "== mod download $svc =="
+            (cd "services/$svc" && go mod download)
+          done
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          services="api-gateway order-service tracking-service carrier-sync-service notification-service"
+          for svc in $services; do
+            echo "== build $svc =="
+            go build "./services/$svc/cmd/server"
+          done
+
+  test:
+    runs-on: ubuntu-latest
+    container: golang:1.25
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .cache/go/build
+            .cache/go/pkg/mod
+          key: ${{ runner.os }}-${{ github.ref_name }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ github.ref_name }}-go-
+            ${{ runner.os }}-go-
+
+      - name: Go version
+        run: go version
+
+      - name: Prepare cache dirs
+        run: mkdir -p "$GOCACHE" "$GOMODCACHE" coverage
+
+      - name: Download modules
+        run: |
+          set -euo pipefail
+          services="api-gateway order-service tracking-service carrier-sync-service notification-service"
+          for svc in $services; do
+            echo "== mod download $svc =="
+            (cd "services/$svc" && go mod download)
+          done
+
+      - name: Test
+        run: |
+          set -euo pipefail
+          services="api-gateway order-service tracking-service carrier-sync-service notification-service"
+          for svc in $services; do
+            echo "== test $svc =="
+            go test "./services/$svc/..."
+          done
+
+  coverage:
+    runs-on: ubuntu-latest
+    container: golang:1.25
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .cache/go/build
+            .cache/go/pkg/mod
+          key: ${{ runner.os }}-${{ github.ref_name }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ github.ref_name }}-go-
+            ${{ runner.os }}-go-
+
+      - name: Go version
+        run: go version
+
+      - name: Prepare cache dirs
+        run: mkdir -p "$GOCACHE" "$GOMODCACHE" coverage
+
+      - name: Download modules
+        run: |
+          set -euo pipefail
+          services="api-gateway order-service tracking-service carrier-sync-service notification-service"
+          for svc in $services; do
+            echo "== mod download $svc =="
+            (cd "services/$svc" && go mod download)
+          done
+
+      - name: Coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          services="api-gateway order-service tracking-service carrier-sync-service notification-service"
+
+          rm -rf coverage
+          mkdir -p coverage
+          echo "mode: count" > coverage/all.out
+          : > coverage/summary.txt
+
+          for svc in $services; do
+            profile="coverage/${svc}.out"
+            func_report="coverage/${svc}.func.txt"
+
+            echo "== coverage $svc =="
+            go test "./services/$svc/..." -covermode=count -coverprofile="$profile"
+            go tool cover -func="$profile" | tee "$func_report"
+            tail -n +2 "$profile" >> coverage/all.out
+
+            percent=$(awk '/^total:/ { gsub("%", "", $3); print $3 }' "$func_report")
+            if [ -z "$percent" ]; then
+              echo "Cannot parse coverage percent for $svc"
+              exit 1
+            fi
+
+            printf "SERVICE_COVERAGE %s %.1f%%\n" "$svc" "$percent" | tee -a coverage/summary.txt
+
+            if [ "$svc" != "api-gateway" ]; then
+              if awk -v p="$percent" -v t="$COVERAGE_THRESHOLD" 'BEGIN { exit (p + 0 < t + 0) ? 0 : 1 }'; then
+                echo "Coverage gate failed for $svc: $percent% < $COVERAGE_THRESHOLD%"
+                exit 1
+              fi
+            fi
+          done
+
+          go tool cover -func=coverage/all.out | tee coverage/all.func.txt
+          total=$(awk '/^total:/ { gsub("%", "", $3); print $3 }' coverage/all.func.txt)
+          if [ -z "$total" ]; then
+            echo "Cannot parse total coverage"
+            exit 1
+          fi
+
+          printf "TOTAL_COVERAGE: %.1f%%\n" "$total" | tee -a coverage/summary.txt
+
+          go install github.com/boumenot/gocover-cobertura@latest
+          "$(go env GOPATH)/bin/gocover-cobertura" < coverage/all.out > coverage/cobertura.xml
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    needs: coverage
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bash curl
+          chmod +x scripts/smoke-local-stack.sh
+
+      - name: Smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! docker info >/dev/null 2>&1; then
+            echo "[compose-smoke] Docker daemon is unavailable on this runner; skipping compose smoke"
+            echo "[compose-smoke] Use a self-hosted / privileged runner if you need to enforce this check"
+            exit 0
+          fi
+          docker version
+          docker compose version
+          ./scripts/smoke-local-stack.sh --down
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f docker-compose.yml down -v || true
