@@ -7,6 +7,8 @@
 ![Coverage](https://img.shields.io/badge/test%20coverage-45%25-yellow?style=for-the-badge)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 
+📄 [Презентация с защиты проекта](docs/presentation.pdf)
+
 TrackFlow - учебный микросервисный проект по логистическому трекингу заказов.
 
 Идея простая: через единый публичный API можно создать заказ, назначить курьера, вести статусы доставки и смотреть таймлайн событий.
