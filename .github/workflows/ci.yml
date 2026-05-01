@@ -11,6 +11,7 @@ env:
   GOCACHE: ${{ github.workspace }}/.cache/go/build
   GOMODCACHE: ${{ github.workspace }}/.cache/go/pkg/mod
   COVERAGE_THRESHOLD: "30"
+  GOFLAGS: -buildvcs=false
 
 jobs:
   build:
@@ -183,6 +184,8 @@ jobs:
   compose-smoke:
     runs-on: ubuntu-latest
     needs: coverage
+    env:
+      SMOKE_TIMEOUT_SECONDS: "180"
     steps:
       - uses: actions/checkout@v5
 
@@ -198,7 +201,7 @@ jobs:
           set -euo pipefail
           if ! docker info >/dev/null 2>&1; then
             echo "[compose-smoke] Docker daemon is unavailable on this runner; skipping compose smoke"
-            echo "[compose-smoke] Use a self-hosted / privileged runner if you need to enforce this check"
+            echo "[compose-smoke] Use a privileged dind-capable runner to enforce this check"
             exit 0
           fi
           docker version
