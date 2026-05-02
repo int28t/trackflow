@@ -164,10 +164,10 @@ python3 -m http.server 8090
 
 Pipeline в GitLab включает:
 
-- build;
-- test;
-- coverage + gate;
-- compose-smoke.
+- build
+- test
+- coverage + gate
+- compose-smoke
 
 Coverage gate:
 
